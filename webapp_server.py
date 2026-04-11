@@ -230,10 +230,26 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
 
 @app.get('/', response_class=HTMLResponse)
 async def serve_app() -> HTMLResponse:
-    html_path = Path(__file__).resolve().parent / 'webapp' / 'index.html'
-    if not html_path.exists():
-        raise HTTPException(status_code=404, detail='Mini App HTML not found')
-    return HTMLResponse(content=html_path.read_text(encoding='utf-8'))
+    # Ищем в webapp/index.html или просто в index.html
+    current_dir = Path(__file__).resolve().parent
+    html_paths = [
+        current_dir / 'webapp' / 'index.html',
+        current_dir / 'index.html',
+    ]
+    
+    for p in html_paths:
+        if p.exists():
+            return HTMLResponse(content=p.read_text(encoding='utf-8'))
+            
+    # Если не нашли, выведем список файлов для отладки прямо в браузере
+    files = [str(f.name) for f in current_dir.iterdir()]
+    webapp_files = []
+    if (current_dir / 'webapp').is_dir():
+        webapp_files = [str(f.name) for f in (current_dir / 'webapp').iterdir()]
+        
+    error_msg = f"HTML not found. Files in root: {files}. Files in webapp: {webapp_files}"
+    logger.error(error_msg)
+    raise HTTPException(status_code=404, detail=error_msg)
 
 
 @app.get('/api/contracts')
