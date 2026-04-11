@@ -574,7 +574,7 @@ class ContractCalculator:
                 prices.append(float(p))
 
         ratio = None
-        if len(prices) >= 3:
+        if len(prices) >= 1:
             try:
                 med = float(statistics.median(prices))
             except Exception:
@@ -625,7 +625,7 @@ class ContractCalculator:
                     )
                 except Exception:
                     pass
-            if imb is None or float(imb) + 1e-12 < float(min_imbalance_ratio):
+            if imb is not None and float(imb) + 1e-12 < float(min_imbalance_ratio):
                 continue
             collections_passed_imb += 1
 
