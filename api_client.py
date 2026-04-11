@@ -386,18 +386,39 @@ class MarketCSGOClient:
             close_connection=True,
             retries=3,
         )
-        items = data.get('items') if isinstance(data, dict) else None
-        if not isinstance(items, dict) or not items:
+        if not isinstance(data, dict):
+            return None
+
+        raw_items = data.get('items')
+        if not raw_items:
+            return None
+
+        # API может возвращать items как список [{market_hash_name, price, ...}]
+        # или как словарь {name: {price: ...}} — обрабатываем оба варианта.
+        if isinstance(raw_items, list):
+            items_iter = raw_items
+        elif isinstance(raw_items, dict):
+            # Конвертируем старый формат в единый вид
+            items_iter = [
+                {'market_hash_name': k, 'price': v.get('price') if isinstance(v, dict) else v}
+                for k, v in raw_items.items()
+            ]
+        else:
+            logger.warning("v2 prices: неизвестный формат items (%s)", type(raw_items))
             return None
 
         new_cache: Dict[str, List[Tuple[float, Optional[float], str, bool]]] = {}
         total_lots = 0
 
-        for item_name, item_data in items.items():
+        for item_data in items_iter:
             if not isinstance(item_data, dict):
                 continue
 
-            # В v2 обычно есть строковая цена вида "$12.34" или "12.34"
+            item_name = str(item_data.get('market_hash_name') or '').strip()
+            if not item_name:
+                continue
+
+            # Цена может быть строкой "0.34" или числом
             price_raw = item_data.get('price')
             if price_raw is None:
                 continue
@@ -411,18 +432,17 @@ class MarketCSGOClient:
                 continue
 
             # Souvenir не нужен для trade-up
-            if 'souvenir' in str(item_name).lower():
+            if 'souvenir' in item_name.lower():
                 continue
 
             # Выкидываем явно не-скины (стикеры/кейсы/капсулы/агенты и т.п.)
             # Для оружейных скинов почти всегда есть " | " между оружием и паттерном
-            item_name_str = str(item_name)
-            if ' | ' not in item_name_str:
+            if ' | ' not in item_name:
                 continue
 
-            is_stattrak = 'stattrak' in str(item_name).lower()
-            wear = self._determine_wear(str(item_name))
-            normalized_name = self._normalize_skin_name(str(item_name))
+            is_stattrak = 'stattrak' in item_name.lower()
+            wear = self._determine_wear(item_name)
+            normalized_name = self._normalize_skin_name(item_name)
 
             if not normalized_name:
                 continue
