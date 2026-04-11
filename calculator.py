@@ -87,8 +87,11 @@ class ContractCalculator:
             "Battle-Scarred": 1.0
         }
         
-        # Комиссия рынка
-        self.market_fee = 0.15  # 15%
+        # Комиссия рынка (market.csgo.com берёт ~7%, не 15% как Steam Market)
+        try:
+            self.market_fee = float(os.getenv('MARKET_SELL_FEE', '0.07') or 0.07)
+        except Exception:
+            self.market_fee = 0.07
 
         try:
             self.csfloat_fee = float(os.getenv('CSFLOAT_FEE', '0.02') or 0.02)
@@ -2633,8 +2636,8 @@ class ContractCalculator:
                 price, item_float, wear = price_info
                 total_expected_value += price * p.probability
         
-        # Учитываем 15% комиссию рынка при продаже
-        net_expected_value = total_expected_value * (1 - self.market_fee)  # 0.85
+        # Учитываем комиссию рынка при продаже
+        net_expected_value = total_expected_value * (1 - self.market_fee)
         roi = ((net_expected_value - total_cost) / total_cost) * 100 if total_cost > 0 else 0
         
         # Float информация
@@ -2843,7 +2846,7 @@ class ContractCalculator:
                         if not max_output_price or est_input_cost <= 0:
                             continue
 
-                        edge = (max_output_price * 0.85) / est_input_cost
+                        edge = (max_output_price * (1.0 - float(self.market_fee))) / est_input_cost
                         if edge < min_edge:
                             continue
 
@@ -3524,7 +3527,7 @@ class ContractCalculator:
                     'input_skins': contract_skins,
                     'main_skins_count': core_count,
                     'filler_skins_count': filler_count,
-                    'hunt_edge': (best_out_price * 0.85) / input_cost if input_cost > 0 else 0.0,
+                    'hunt_edge': (best_out_price * (1.0 - float(self.market_fee))) / input_cost if input_cost > 0 else 0.0,
                     'hunt_output': best_out_name,
                     'hunt_output_price': best_out_price,
                     'hunt_target_wear': best_out_wear,
@@ -4445,8 +4448,8 @@ class ContractCalculator:
         if bool(self._multisource_net_pricing):
             ev_after_fee = float(gross_ev)
         else:
-            # EV с учетом комиссии 15%
-            ev_after_fee = gross_ev * 0.85
+            # EV с учётом комиссии рынка (market.csgo.com ~7%, не Steam 15%)
+            ev_after_fee = gross_ev * (1.0 - float(self.market_fee))
         net_profit = ev_after_fee - input_cost
         roi = (net_profit / input_cost) * 100 if input_cost > 0 else 0
 
