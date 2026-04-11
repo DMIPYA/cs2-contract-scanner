@@ -1,0 +1,23 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.venv
+venv/
+.git/
+.vscode/
+
+# Кэш цен (большие файлы)
+market_prices_cache.pkl.gz
+market_prices_cache.pkl.gz.*
+*.tmp
+
+# Логи и временные файлы
+*.log
+*.tmp
+debug-logs/
+
+# Системные файлы
+.DS_Store
+Thumbs.db

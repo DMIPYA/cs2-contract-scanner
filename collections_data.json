@@ -1,0 +1,150 @@
+{
+  "Assault Collection": {
+    "skins": {
+      "AK-47 | Redline": {
+        "rarity": "Covert",
+        "weapon": "AK-47"
+      },
+      "AWP | Asiimov": {
+        "rarity": "Covert",
+        "weapon": "AWP"
+      },
+      "M4A4 | Bullet Rain": {
+        "rarity": "Classified",
+        "weapon": "M4A4"
+      },
+      "Glock-18 | Water Elemental": {
+        "rarity": "Classified",
+        "weapon": "Glock-18"
+      },
+      "USP-S | Orion": {
+        "rarity": "Restricted",
+        "weapon": "USP-S"
+      },
+      "M4A1-S | Hyper Beast": {
+        "rarity": "Restricted",
+        "weapon": "M4A1-S"
+      },
+      "Desert Eagle | Blaze": {
+        "rarity": "Mil-Spec",
+        "weapon": "Desert Eagle"
+      },
+      "P250 | Muertos": {
+        "rarity": "Mil-Spec",
+        "weapon": "P250"
+      },
+      "Nova | Rock": {
+        "rarity": "Mil-Spec",
+        "weapon": "Nova"
+      },
+      "MAG-7 | Seabird": {
+        "rarity": "Mil-Spec",
+        "weapon": "MAG-7"
+      },
+      "P2000 | Silver Quartz": {
+        "rarity": "Mil-Spec",
+        "weapon": "P2000"
+      },
+      "Glock-18 | Brass Knuckles": {
+        "rarity": "Mil-Spec",
+        "weapon": "Glock-18"
+      }
+    }
+  },
+  "Prisma 2 Collection": {
+    "skins": {
+      "AK-47 | Empress": {
+        "rarity": "Covert",
+        "weapon": "AK-47"
+      },
+      "AWP | Oni Taiji": {
+        "rarity": "Covert",
+        "weapon": "AWP"
+      },
+      "M4A4 | Emperor": {
+        "rarity": "Classified",
+        "weapon": "M4A4"
+      },
+      "Glock-18 | Water Elemental": {
+        "rarity": "Classified",
+        "weapon": "Glock-18"
+      },
+      "USP-S | Kill Confirmed": {
+        "rarity": "Restricted",
+        "weapon": "USP-S"
+      },
+      "M4A1-S | Mecha Industries": {
+        "rarity": "Restricted",
+        "weapon": "M4A1-S"
+      },
+      "Desert Eagle | Directive": {
+        "rarity": "Mil-Spec",
+        "weapon": "Desert Eagle"
+      },
+      "P250 | VCT": {
+        "rarity": "Mil-Spec",
+        "weapon": "P250"
+      },
+      "MP7 | Motherboard": {
+        "rarity": "Mil-Spec",
+        "weapon": "MP7"
+      },
+      "Nova | Polar": {
+        "rarity": "Mil-Spec",
+        "weapon": "Nova"
+      },
+      "P2000 | Imperial Dragon": {
+        "rarity": "Mil-Spec",
+        "weapon": "P2000"
+      },
+      "Dual Berettas | Melondrama": {
+        "rarity": "Mil-Spec",
+        "weapon": "Dual Berettas"
+      }
+    }
+  },
+  "Horizon Collection": {
+    "skins": {
+      "AK-47 | Redline": {
+        "rarity": "Covert",
+        "weapon": "AK-47"
+      },
+      "AWP | Asiimov": {
+        "rarity": "Covert",
+        "weapon": "AWP"
+      },
+      "M4A1-S | Decimator": {
+        "rarity": "Classified",
+        "weapon": "M4A1-S"
+      },
+      "Glock-18 | Water Elemental": {
+        "rarity": "Classified",
+        "weapon": "Glock-18"
+      },
+      "P2000 | Imperial Dragon": {
+        "rarity": "Restricted",
+        "weapon": "P2000"
+      },
+      "MP7 | Bloodsport": {
+        "rarity": "Restricted",
+        "weapon": "MP7"
+      },
+      "Nova | Hyper Beast": {
+        "rarity": "Mil-Spec",
+        "weapon": "Nova"
+      },
+      "MAG-7 | Bulldozer": {
+        "rarity": "Mil-Spec",
+        "weapon": "MAG-7"
+      },
+      "FAMAS | Mecha Industries": {
+        "rarity": "Mil-Spec",
+        "weapon": "FAMAS"
+      },
+      "Galil AR | Chatterbox": {
+        "rarity": "Mil-Spec",
+        "weapon": "Galil AR"
+      }
+    }
+  }
+}
