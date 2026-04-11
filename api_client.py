@@ -440,6 +440,14 @@ class MarketCSGOClient:
             if ' | ' not in item_name:
                 continue
 
+            # volume = количество активных ордеров на продажу.
+            # Сохраняем min(volume, 50) копий, чтобы get_listings возвращала
+            # реалистичную глубину ордербука и liquidity-дисконт считался верно.
+            try:
+                volume = max(1, min(int(str(item_data.get('volume') or '1').strip()), 50))
+            except Exception:
+                volume = 1
+
             is_stattrak = 'stattrak' in item_name.lower()
             wear = self._determine_wear(item_name)
             normalized_name = self._normalize_skin_name(item_name)
@@ -450,8 +458,9 @@ class MarketCSGOClient:
             if normalized_name not in new_cache:
                 new_cache[normalized_name] = []
 
-            new_cache[normalized_name].append((price, None, wear, is_stattrak))
-            total_lots += 1
+            for _ in range(volume):
+                new_cache[normalized_name].append((price, None, wear, is_stattrak))
+            total_lots += volume
 
         if not new_cache:
             return None
