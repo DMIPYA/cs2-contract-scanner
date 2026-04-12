@@ -168,11 +168,18 @@ class TargetHuntingService:
         except Exception:
             min_net_profit = 0.0
 
+        # SAFE mode scans all rarities (including Consumer) since PP=100% is rare
+        # and we want the widest possible search.
+        input_rarities_override = None
+        if calc_mode == 'SAFE':
+            input_rarities_override = ['Consumer', 'Industrial', 'Mil-Spec', 'Restricted', 'Classified']
+
         try:
             part = self.calculator.find_target_hunting_pro_mode(
                 max_results=max_results,
                 max_investment=None,
                 is_stattrak=is_stattrak,
+                input_rarities=input_rarities_override,
                 min_roi_pct=min_roi_pct,
                 min_profit_probability=min_profit_probability,
                 min_imbalance_ratio=min_imbalance_ratio,
