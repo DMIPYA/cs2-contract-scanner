@@ -106,8 +106,8 @@ class TargetHuntingService:
     def _normalize_mode(self, mode: str) -> Tuple[str, str]:
         raw = str(mode or 'PROFIT').strip().upper()
         raw = raw.replace('_', '-').replace(' ', '')
-        if raw in {'HIGH-RISK', 'HIGHRISK', 'RISK'}:
-            return ('RISK', 'HIGH-RISK')
+        if raw in {'SAFE'}:
+            return ('SAFE', 'SAFE')
         return ('PROFIT', 'PROFIT')
 
     def _compute_results_part(self, *, calc_mode: str, is_stattrak: bool) -> List[Dict]:
@@ -131,6 +131,8 @@ class TargetHuntingService:
             min_profit_probability = float(os.getenv('HUNT_MIN_PP', '0.25') or 0.25)
         except Exception:
             min_profit_probability = 0.25
+        if calc_mode == 'SAFE':
+            min_profit_probability = 1.0
 
         try:
             min_imbalance_ratio = float(os.getenv('HUNT_MIN_IMB', '1.2') or 1.2)
@@ -504,7 +506,7 @@ class TargetHuntingService:
         def _worker():
             refresh_after_seconds = 60 * 60
             check_every_seconds = 60
-            modes = ['PROFIT', 'RISK']
+            modes = ['PROFIT', 'SAFE']
 
             while not self._stop.is_set():
                 now = time.time()

@@ -481,7 +481,7 @@ body {
     <!-- Mode toggle -->
     <div class="mode-toggle">
       <div class="mode-btn active" data-mode="PROFIT">Profit</div>
-      <div class="mode-btn" data-mode="RISK">High-Risk</div>
+      <div class="mode-btn" data-mode="SAFE">Safe</div>
     </div>
 
     <!-- Filter chips -->
@@ -1014,7 +1014,7 @@ async function openDetail(idx) {
 
 function renderDetailSummary(c) {
   const stLabel = c.is_stattrak ? 'StatTrak' : 'Normal';
-  const modeLabel = state.mode === 'PROFIT' ? 'PROFIT' : 'HIGH-RISK';
+  const modeLabel = state.mode === 'PROFIT' ? 'PROFIT' : 'SAFE';
   document.getElementById('detail-label').textContent = `#${c.idx} — ${modeLabel} · ${stLabel}`;
   document.getElementById('detail-name').textContent = c.name || '';
   const roi = parseFloat(c.roi) || 0;

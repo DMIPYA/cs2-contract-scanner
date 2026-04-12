@@ -1376,7 +1376,7 @@ class ContractCalculator:
                             else:
                                 rarity_stats['contracts_jackpot'] = int(rarity_stats.get('contracts_jackpot') or 0) + 1
                                 # Jackpot filter: minimum profit probability and ROI (same thresholds as regular contracts).
-                                if pp_f + 1e-12 < float(jackpot_min_pp):
+                                if pp_f + 1e-12 < max(float(jackpot_min_pp), float(min_profit_probability)):
                                     continue
                                 if roi_f + 1e-9 < float(min_roi_pct):
                                     continue
@@ -1715,6 +1715,20 @@ class ContractCalculator:
                 pass
 
         merged = list(refined) + list(results[k:])
+
+        # Post-refine filter: re-check thresholds with updated prices.
+        if float(min_profit_probability) > 0.0 or float(min_roi_pct) > -1e9:
+            filtered_merged = []
+            for _r in merged:
+                _pp = float(_r.get('profit_probability') or 0.0)
+                _roi = float(_r.get('roi') or 0.0)
+                if _pp + 1e-12 < float(min_profit_probability):
+                    continue
+                if _roi + 1e-9 < float(min_roi_pct):
+                    continue
+                filtered_merged.append(_r)
+            merged = filtered_merged
+
         try:
             merged.sort(key=lambda x: float(x.get('_rank_score') or x.get('contract_score') or x.get('final_score') or 0.0), reverse=True)
         except Exception:
