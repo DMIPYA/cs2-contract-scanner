@@ -126,6 +126,9 @@ class TargetHuntingService:
             min_roi_pct = float(os.getenv('HUNT_MIN_ROI_PCT', '2.0') or 2.0)
         except Exception:
             min_roi_pct = 2.0
+        # SAFE mode: guaranteed-profit contracts — relax ROI/imbalance to maximise count
+        if calc_mode == 'SAFE':
+            min_roi_pct = float(os.getenv('HUNT_SAFE_MIN_ROI_PCT', '0.5') or 0.5)
 
         try:
             min_profit_probability = float(os.getenv('HUNT_MIN_PP', '0.25') or 0.25)
@@ -138,6 +141,8 @@ class TargetHuntingService:
             min_imbalance_ratio = float(os.getenv('HUNT_MIN_IMB', '1.2') or 1.2)
         except Exception:
             min_imbalance_ratio = 1.2
+        if calc_mode == 'SAFE':
+            min_imbalance_ratio = float(os.getenv('HUNT_SAFE_MIN_IMB', '1.0') or 1.0)
 
         try:
             max_targets_per_rarity = int(os.getenv('HUNT_MAX_TARGETS_PER_RARITY', '200') or 200)

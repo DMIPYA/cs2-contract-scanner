@@ -81,6 +81,8 @@ _RARITY_ORDER = ['Consumer', 'Industrial', 'Mil-Spec', 'Restricted', 'Classified
 
 def _normalize_mode(mode: str) -> str:
     raw = str(mode or 'PROFIT').strip().upper().replace('_', '-').replace(' ', '')
+    if raw in {'SAFE'}:
+        return 'SAFE'
     return 'RISK' if raw in {'HIGH-RISK', 'HIGHRISK', 'RISK'} else 'PROFIT'
 
 
@@ -280,6 +282,12 @@ async def api_contracts(
     if mode == 'PROFIT' and results:
         try:
             results = sorted(results, key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
+        except Exception:
+            pass
+    # Sort SAFE mode by ROI descending (all guaranteed profitable)
+    if mode == 'SAFE' and results:
+        try:
+            results = sorted(results, key=lambda x: float(x.get('roi') or 0.0), reverse=True)
         except Exception:
             pass
 
