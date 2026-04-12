@@ -319,6 +319,42 @@ class MarketCSGOClient:
                 obj = pickle.load(f)
             if not isinstance(obj, dict) or not obj:
                 return None
+            # Sanitize anomalous prices: collect all prices and remove entries that are
+            # absurdly above median (e.g. stale CSFloat data, test entries, corrupted lots).
+            try:
+                all_prices_flat = []
+                for lots in obj.values():
+                    if isinstance(lots, list):
+                        for lot in lots:
+                            if isinstance(lot, (list, tuple)) and len(lot) >= 1:
+                                try:
+                                    all_prices_flat.append(float(lot[0]))
+                                except Exception:
+                                    pass
+                if all_prices_flat:
+                    all_prices_flat.sort()
+                    median_price = all_prices_flat[len(all_prices_flat) // 2]
+                    # Allow up to 10000x median or $10000 whichever is larger — clearly anomalous prices way above this
+                    max_sane_price = max(float(median_price) * 10000.0, 10000.0)
+                    cleaned = {}
+                    removed = 0
+                    for k, lots in obj.items():
+                        clean_lots = []
+                        if isinstance(lots, list):
+                            for lot in lots:
+                                try:
+                                    if float(lot[0]) > max_sane_price:
+                                        removed += 1
+                                        continue
+                                except Exception:
+                                    pass
+                                clean_lots.append(lot)
+                        cleaned[k] = clean_lots
+                    if removed > 0:
+                        logger.warning('Disk cache sanitized: removed %d anomalous lots (median=%.2f max_sane=%.0f)', removed, median_price, max_sane_price)
+                    obj = cleaned
+            except Exception as e:
+                logger.info('Disk cache sanitize error: %s', e)
             if age > float(self.disk_cache_ttl) and bool(allow_stale):
                 logger.warning('Loaded stale disk price cache (age_s=%.1f > ttl_s=%.1f)', float(age), float(self.disk_cache_ttl))
             return obj
@@ -458,8 +494,20 @@ class MarketCSGOClient:
             if normalized_name not in new_cache:
                 new_cache[normalized_name] = []
 
+            # Оцениваем приблизительный float по wear (середина диапазона).
+            # Это позволяет max_float-фильтрам в get_price_with_float и get_listings
+            # корректно отбирать предметы нужного wear-уровня вместо игнорирования фильтра.
+            _WEAR_FLOAT_MID = {
+                'Factory New':   0.035,
+                'Minimal Wear':  0.110,
+                'Field-Tested':  0.260,
+                'Well-Worn':     0.415,
+                'Battle-Scarred': 0.725,
+            }
+            item_float = _WEAR_FLOAT_MID.get(wear, None)
+
             for _ in range(volume):
-                new_cache[normalized_name].append((price, None, wear, is_stattrak))
+                new_cache[normalized_name].append((price, item_float, wear, is_stattrak))
             total_lots += volume
 
         if not new_cache:

@@ -203,11 +203,33 @@ class ContractCalculator:
 
     def _best_target_wear(self, collection_name: str, input_rarity: str, *, is_stattrak: bool) -> str:
         best_wear = 'Field-Tested'
-        best = -1.0
-        for w in ['Factory New', 'Minimal Wear', 'Field-Tested']:
-            p = self._avg_outcome_price_for_collection(collection_name, input_rarity, is_stattrak=is_stattrak, target_wear=w)
-            if p and float(p) > best:
-                best = float(p)
+        best_score = -1.0
+        for w in ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']:
+            out_price = self._avg_outcome_price_for_collection(
+                collection_name, input_rarity, is_stattrak=is_stattrak, target_wear=w
+            )
+            if not out_price or float(out_price) <= 0:
+                continue
+            # Оцениваем цену входных скинов при правильном ограничении float
+            # (т.е. сравниваем FN-выход/FN-вход, FT-выход/FT-вход — «яблоки к яблокам»).
+            max_f = self._wear_to_max_float(w)
+            in_skins = self._get_main_skins(
+                collection_name,
+                count=1,
+                is_stattrak=is_stattrak,
+                rarity=input_rarity,
+                max_float=max_f,
+            )
+            if not in_skins:
+                continue
+            in_price = float(in_skins[0].get('price') or 0.0)
+            if in_price <= 0:
+                continue
+            # Score = EV-ratio: средняя цена выхода / стоимость 1 входного скина
+            # Вероятность одна и та же для всех wear → можно опустить.
+            score = float(out_price) / float(in_price)
+            if score > best_score:
+                best_score = float(score)
                 best_wear = w
         return best_wear
 
@@ -642,8 +664,11 @@ class ContractCalculator:
             # where the output price is high *relative to the entry cost*, not just in
             # absolute terms.  _get_main_skins is memoized so this is essentially free.
             try:
+                # Use max_float consistent with best_wear so the score reflects actual entry cost
+                _max_f_for_score = self._wear_to_max_float(best_wear)
                 _cheap_ins = self._get_main_skins(
-                    c, count=1, is_stattrak=bool(is_stattrak), rarity=input_rarity, max_float=1.0,
+                    c, count=1, is_stattrak=bool(is_stattrak), rarity=input_rarity,
+                    max_float=float(_max_f_for_score),
                 )
                 _input_price_est_10x = float(_cheap_ins[0].get('price') or 0.0) * 10.0 if _cheap_ins else 0.0
             except Exception:
@@ -999,12 +1024,20 @@ class ContractCalculator:
                 outcomes_count_for_target = int(t.get('outcomes_count') or 0)
 
                 max_float = self._wear_to_max_float(best_wear)
-                effective_max_float = float(os.getenv('HUNT_INPUT_MAX_FLOAT', '1.0') or 1.0)
+                # По умолчанию ограничиваем входной float так, чтобы выходной wear соответствовал
+                # best_wear (самому доходному). Можно переопределить через HUNT_INPUT_MAX_FLOAT.
+                effective_max_float_default = str(os.getenv('HUNT_INPUT_MAX_FLOAT', '') or '').strip()
+                try:
+                    effective_max_float = float(effective_max_float_default) if effective_max_float_default else float(max_float)
+                except Exception:
+                    effective_max_float = float(max_float)
                 try:
                     if self._normalize_rarity(input_rarity) == 'Industrial':
-                        effective_max_float = float(os.getenv('INDUSTRIAL_INPUT_MAX_FLOAT', '1.0') or 1.0)
+                        ind_override = str(os.getenv('INDUSTRIAL_INPUT_MAX_FLOAT', '') or '').strip()
+                        if ind_override:
+                            effective_max_float = float(ind_override)
                 except Exception:
-                    effective_max_float = float(os.getenv('HUNT_INPUT_MAX_FLOAT', '1.0') or 1.0)
+                    pass
 
                 _t1 = time.perf_counter() if prof else 0.0
                 target_items = self._get_candidate_inputs(
@@ -1053,7 +1086,11 @@ class ContractCalculator:
 
                     virtual_stack_enabled = str(os.getenv('HUNT_VIRTUAL_STACK', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
 
-                    prefer_wear = str(os.getenv('HUNT_PREFER_OUT_WEAR', 'Factory New') or '').strip()
+                    # prefer_wear controls float penalty in stack sorting.
+                    # Use best_wear for this collection so we select items whose float
+                    # matches the optimal output wear rather than always pushing toward FN.
+                    _prefer_wear_override = str(os.getenv('HUNT_PREFER_OUT_WEAR', '') or '').strip()
+                    prefer_wear = _prefer_wear_override if _prefer_wear_override else best_wear
                     wear_thr = {
                         'Factory New': 0.07,
                         'Minimal Wear': 0.15,
@@ -1153,7 +1190,7 @@ class ContractCalculator:
                                 input_rarity,
                                 int(max(200, filler_cnt * 80)),
                                 is_stattrak,
-                                target_float_threshold=None,
+                                target_float_threshold=float(effective_max_float) if float(effective_max_float) < 0.999 else None,
                                 max_price=None,
                             )
                             if len(fillers) <= 0:
@@ -1338,9 +1375,10 @@ class ContractCalculator:
                                 rarity_stats['contracts_pp_ok'] = int(rarity_stats.get('contracts_pp_ok') or 0) + 1
                             else:
                                 rarity_stats['contracts_jackpot'] = int(rarity_stats.get('contracts_jackpot') or 0) + 1
-                                # Jackpot filter: minimum profit probability.
-                                # More lenient than normal min_profit_probability but still a guard.
+                                # Jackpot filter: minimum profit probability and ROI (same thresholds as regular contracts).
                                 if pp_f + 1e-12 < float(jackpot_min_pp):
+                                    continue
+                                if roi_f + 1e-9 < float(min_roi_pct):
                                     continue
                                 rarity_stats['contracts_jackpot_ok'] = int(rarity_stats.get('contracts_jackpot_ok') or 0) + 1
 
