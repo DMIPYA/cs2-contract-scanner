@@ -302,9 +302,11 @@ body {
 
 /* ── detail header ── */
 .detail-header {
-  flex-shrink: 0; height: 60px; background: var(--surface);
+  flex-shrink: 0; background: var(--surface);
   border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; padding: 0 16px; gap: 12px;
+  display: flex; align-items: center;
+  padding: calc(15px + var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, var(--safe-top, 0px))) 16px 15px;
+  gap: 12px;
 }
 .back-btn {
   width: 30px; height: 30px; background: var(--surface2);
