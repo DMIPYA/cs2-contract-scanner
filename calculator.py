@@ -965,6 +965,33 @@ class ContractCalculator:
                     dbg_summary.append(rarity_stats)
                 continue
 
+            # SAFE mode: augment targets with ALL wears per collection.
+            # The default best_wear maximises average ROI, but PP=100% may exist at a
+            # different wear (e.g. FT inputs are cheap enough that all FT outputs exceed cost).
+            if mode == 'SAFE' and ranked_targets:
+                _all_wears = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
+                _seen_cw = set()
+                _augmented = []
+                for _t in ranked_targets:
+                    _ckey = (str(_t.get('target_collection') or ''), str(_t.get('target_wear') or ''))
+                    _seen_cw.add(_ckey)
+                    _augmented.append(_t)
+                # For each unique collection, add representative targets at other wears.
+                _seen_collections = set()
+                for _t in list(ranked_targets):
+                    _tc2 = str(_t.get('target_collection') or '')
+                    if _tc2 in _seen_collections:
+                        continue
+                    _seen_collections.add(_tc2)
+                    for _w in _all_wears:
+                        if (_tc2, _w) in _seen_cw:
+                            continue
+                        _seen_cw.add((_tc2, _w))
+                        _dup_t = dict(_t)
+                        _dup_t['target_wear'] = _w
+                        _augmented.append(_dup_t)
+                ranked_targets = _augmented
+
             # Precompute filler collections once per rarity+mode.
             # This was previously recomputed for every target and is extremely expensive.
             try:
@@ -1475,9 +1502,13 @@ class ContractCalculator:
                 pass
 
         # de-duplicate by target skin (most expensive outcome). Keep the best opportunity per skin.
+        # For SAFE mode, include wear in the key so PP=100% at different wears both survive.
         uniq: Dict[Tuple, Dict] = {}
         for r in results:
-            sig = (str(r.get('hunt_output') or ''), bool(r.get('is_stattrak')))
+            if mode == 'SAFE':
+                sig = (str(r.get('hunt_output') or ''), bool(r.get('is_stattrak')), str(r.get('hunt_target_wear') or ''))
+            else:
+                sig = (str(r.get('hunt_output') or ''), bool(r.get('is_stattrak')))
             prev = uniq.get(sig)
             if prev is None:
                 uniq[sig] = r
@@ -1717,12 +1748,19 @@ class ContractCalculator:
         merged = list(refined) + list(results[k:])
 
         # Post-refine filter: re-check thresholds with updated prices.
+        # For SAFE mode (PP=100%), skip the PP re-check: the initial eval calculated PP
+        # using gross market prices, but the refine step uses net prices
+        # (_multisource_net_pricing=True), which deflates outcomes by the selling fee.
+        # Re-checking PP with those net-priced values would falsely discard contracts
+        # that genuinely have every outcome's market value above input cost.
+        # The ROI check still applies (it's consistently fee-aware in both passes).
+        _safe_mode = float(min_profit_probability) >= 1.0 - 1e-9
         if float(min_profit_probability) > 0.0 or float(min_roi_pct) > -1e9:
             filtered_merged = []
             for _r in merged:
                 _pp = float(_r.get('profit_probability') or 0.0)
                 _roi = float(_r.get('roi') or 0.0)
-                if _pp + 1e-12 < float(min_profit_probability):
+                if (not _safe_mode) and _pp + 1e-12 < float(min_profit_probability):
                     continue
                 if _roi + 1e-9 < float(min_roi_pct):
                     continue
@@ -4489,12 +4527,12 @@ class ContractCalculator:
             prob = float(o.get('probability') or 0.0)
             price = float(o.get('price') or 0.0)
             gross_ev += price * prob
-            # Apply fee consistently: during refine _multisource_net_pricing=True and price is
-            # already net; during initial eval price is gross so we must deduct the fee before
-            # comparing to input_cost. Without this, gross-price contracts appear PP=100% but
-            # then fail the post-refine filter after the fee is applied.
-            eff_price = float(price) if bool(self._multisource_net_pricing) else float(price) * (1.0 - float(self.market_fee))
-            if eff_price > input_cost:
+            # PP = probability that the market value of the outcome exceeds input cost.
+            # When _multisource_net_pricing=True (refine step), price is already net;
+            # when False (initial eval), price is gross market value.
+            # We compare as-is: PP reflects market-value profitability.
+            # Selling fees are captured separately in ROI/EV.
+            if price > input_cost:
                 profit_probability += prob
 
             if price > 0.0 and price > float(best_outcome_price):
