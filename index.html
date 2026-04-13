@@ -14,6 +14,7 @@ html, body { height: 100%; overflow: hidden; }
 
 /* ── TOKENS ── */
 :root {
+  --safe-top:    0px;
   --bg:          #0d0d0f;
   --surface:     #141416;
   --surface2:    #1a1a1e;
@@ -78,7 +79,7 @@ body {
   flex-shrink: 0;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  padding: 10px 16px 12px;
+  padding: calc(10px + var(--safe-top)) 16px 12px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -665,10 +666,26 @@ const tg = window.Telegram && window.Telegram.WebApp;
 if (tg) {
   tg.ready();
   tg.expand();
+  // Match Telegram chrome to app theme
+  if (tg.setHeaderColor) tg.setHeaderColor('#0d0d0f');
+  if (tg.setBackgroundColor) tg.setBackgroundColor('#0d0d0f');
+  // Request fullscreen (Bot API 8.0+)
+  if (tg.requestFullscreen) tg.requestFullscreen();
+  tg.onEvent('fullscreen_changed', _onFullscreenChange);
+  tg.onEvent('fullscreen_failed', function() {});
   // Signal to Telegram that this app handles the back button
   if (tg.BackButton) {
     tg.BackButton.onClick(goHome);
   }
+}
+
+function _onFullscreenChange() {
+  try {
+    var insets = (tg && tg.safeAreaInsets) || {};
+    var top = parseInt(insets.top || 0, 10);
+    document.documentElement.style.setProperty('--safe-top', top + 'px');
+    document.body.classList.toggle('fullscreen', !!(tg && tg.isFullscreen));
+  } catch(e) {}
 }
 
 function haptic(style) {

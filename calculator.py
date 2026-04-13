@@ -4489,7 +4489,12 @@ class ContractCalculator:
             prob = float(o.get('probability') or 0.0)
             price = float(o.get('price') or 0.0)
             gross_ev += price * prob
-            if price > input_cost:
+            # Apply fee consistently: during refine _multisource_net_pricing=True and price is
+            # already net; during initial eval price is gross so we must deduct the fee before
+            # comparing to input_cost. Without this, gross-price contracts appear PP=100% but
+            # then fail the post-refine filter after the fee is applied.
+            eff_price = float(price) if bool(self._multisource_net_pricing) else float(price) * (1.0 - float(self.market_fee))
+            if eff_price > input_cost:
                 profit_probability += prob
 
             if price > 0.0 and price > float(best_outcome_price):
