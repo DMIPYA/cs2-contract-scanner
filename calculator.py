@@ -66,6 +66,7 @@ class ContractCalculator:
         self._memo_target_rank: Dict[Tuple, List[Dict]] = {}
         self._memo_contract_target_prob: Dict[Tuple, float] = {}
         self._memo_contract_max_output: Dict[Tuple, float] = {}
+        self._memo_contract_craftability: Dict[Tuple, Dict] = {}
         self._memo_lock = threading.Lock()
 
         self._last_target_suite_diagnostics: Optional[Dict] = None
@@ -572,6 +573,177 @@ class ContractCalculator:
                     pass
         return dict(val)
 
+    def _check_contract_craftability(
+        self,
+        contract_skins: List[Dict],
+        *,
+        is_stattrak: bool,
+        allow_unknown_float: bool = False,
+        allow_refresh: bool = False,
+    ) -> Dict:
+        key = (
+            tuple(
+                sorted(
+                    (
+                        str(s.get('name') or ''),
+                        round(float(s.get('float') or 0.0), 5),
+                        str(s.get('wear') or ''),
+                        str(s.get('instance_key') or ''),
+                    )
+                    for s in contract_skins
+                )
+            ),
+            bool(is_stattrak),
+            bool(allow_unknown_float),
+            bool(allow_refresh),
+        )
+        with self._memo_lock:
+            cached = self._memo_contract_craftability.get(key)
+        if cached is not None:
+            return dict(cached)
+
+        if not contract_skins:
+            result = {
+                'craftable': False,
+                'reason': 'empty_contract',
+                'min_depth': 0,
+                'limiting_skin': None,
+                'required_slots': 0,
+                'matched_slots': 0,
+            }
+            with self._memo_lock:
+                self._memo_contract_craftability[key] = dict(result)
+            return dict(result)
+
+        try:
+            per_skin_limit_mult = int(os.getenv('HUNT_CRAFTABILITY_FETCH_LIMIT_MULT', '6') or 6)
+        except Exception:
+            per_skin_limit_mult = 6
+        if per_skin_limit_mult < 2:
+            per_skin_limit_mult = 2
+
+        required_by_skin: Dict[str, List[float]] = defaultdict(list)
+        for s in contract_skins:
+            skin_name = str(s.get('name') or '')
+            if not skin_name:
+                result = {
+                    'craftable': False,
+                    'reason': 'missing_skin_name',
+                    'min_depth': 0,
+                    'limiting_skin': None,
+                    'required_slots': 0,
+                    'matched_slots': 0,
+                }
+                with self._memo_lock:
+                    self._memo_contract_craftability[key] = dict(result)
+                return dict(result)
+
+            cap = s.get('float')
+            try:
+                cap_f = float(cap) if cap is not None else None
+            except Exception:
+                cap_f = None
+            if cap_f is None:
+                cap_f = self._estimate_float_from_wear(s.get('wear'))
+            if cap_f is None:
+                if not bool(allow_unknown_float):
+                    result = {
+                        'craftable': False,
+                        'reason': 'unknown_required_float',
+                        'min_depth': 0,
+                        'limiting_skin': skin_name,
+                        'required_slots': 1,
+                        'matched_slots': 0,
+                    }
+                    with self._memo_lock:
+                        self._memo_contract_craftability[key] = dict(result)
+                    return dict(result)
+                cap_f = 1.0
+            required_by_skin[skin_name].append(float(cap_f))
+
+        min_depth = None
+        limiting_skin = None
+        limiting_required = 0
+        limiting_matched = 0
+
+        for skin_name, required_caps in required_by_skin.items():
+            caps_sorted = sorted(float(x) for x in required_caps)
+            fetch_limit = max(40, int(len(caps_sorted)) * int(per_skin_limit_mult))
+            max_cap = max(caps_sorted) if caps_sorted else None
+
+            try:
+                lots = self._cached_get_listings(
+                    skin_name,
+                    target_wear=None,
+                    max_float=float(max_cap) if max_cap is not None and float(max_cap) < 0.999999 else None,
+                    exclude_stattrak=not bool(is_stattrak),
+                    require_stattrak=bool(is_stattrak),
+                    strict_name_match=False,
+                    allow_refresh=bool(allow_refresh),
+                    limit=int(fetch_limit),
+                )
+            except Exception:
+                lots = []
+
+            normalized_lots: List[Tuple[float, float, str]] = []
+            for price, lot_float, wear in list(lots or []):
+                lf = lot_float
+                if lf is None:
+                    lf = self._estimate_float_from_wear(wear)
+                if lf is None:
+                    if not bool(allow_unknown_float):
+                        continue
+                    lf = 1.0
+                try:
+                    lf2 = float(lf)
+                except Exception:
+                    continue
+                normalized_lots.append((lf2, float(price), str(wear or '')))
+
+            normalized_lots.sort(key=lambda x: (float(x[0]), float(x[1])))
+            depth = len(normalized_lots)
+            if min_depth is None or depth < int(min_depth):
+                min_depth = int(depth)
+
+            matched = 0
+            lot_idx = 0
+            for cap in caps_sorted:
+                found = False
+                while lot_idx < len(normalized_lots):
+                    lot_float_f, _lot_price_f, _lot_wear = normalized_lots[lot_idx]
+                    lot_idx += 1
+                    if float(lot_float_f) <= float(cap) + 1e-9:
+                        matched += 1
+                        found = True
+                        break
+                if not found:
+                    limiting_skin = str(skin_name)
+                    limiting_required = int(len(caps_sorted))
+                    limiting_matched = int(matched)
+                    result = {
+                        'craftable': False,
+                        'reason': 'insufficient_matching_listings',
+                        'min_depth': int(min_depth or 0),
+                        'limiting_skin': limiting_skin,
+                        'required_slots': int(limiting_required),
+                        'matched_slots': int(limiting_matched),
+                    }
+                    with self._memo_lock:
+                        self._memo_contract_craftability[key] = dict(result)
+                    return dict(result)
+
+        result = {
+            'craftable': True,
+            'reason': 'ok',
+            'min_depth': int(min_depth or 0),
+            'limiting_skin': None,
+            'required_slots': int(len(contract_skins)),
+            'matched_slots': int(len(contract_skins)),
+        }
+        with self._memo_lock:
+            self._memo_contract_craftability[key] = dict(result)
+        return dict(result)
+
     def _collection_imbalance_ratio(self, collection_name: str, input_rarity: str, *, is_stattrak: bool) -> Optional[float]:
         input_rarity = self._normalize_rarity(input_rarity)
         memo_key = (collection_name, input_rarity, bool(is_stattrak))
@@ -936,6 +1108,7 @@ class ContractCalculator:
                 'targets_considered': 0,
                 'targets_with_inputs': 0,
                 'contracts_built': 0,
+                'contracts_craftable': 0,
                 'contracts_ev_ok': 0,
                 'contracts_pp_ok': 0,
                 'contracts_roi_ok': 0,
@@ -1233,6 +1406,16 @@ class ContractCalculator:
 
                             rarity_stats['contracts_built'] = int(rarity_stats.get('contracts_built') or 0) + 1
 
+                            craftability = self._check_contract_craftability(
+                                contract,
+                                is_stattrak=is_stattrak,
+                                allow_unknown_float=False,
+                                allow_refresh=False,
+                            )
+                            if not bool(craftability.get('craftable')):
+                                continue
+                            rarity_stats['contracts_craftable'] = int(rarity_stats.get('contracts_craftable') or 0) + 1
+
                             if prof:
                                 prof_totals['contracts_built'] = int(prof_totals.get('contracts_built') or 0) + 1
                             _t2 = time.perf_counter() if prof else 0.0
@@ -1427,6 +1610,8 @@ class ContractCalculator:
                                 'jackpot_ratio': float(jackpot_ratio_f),
                                 'is_jackpot': bool(is_jackpot_f),
                                 'outcomes_count': int(outcomes_count_for_target),
+                                'craftable': True,
+                                'craftability_min_depth': int(craftability.get('min_depth') or 0),
                             })
 
                             if input_cost_f > 0.0:
@@ -1738,7 +1923,16 @@ class ContractCalculator:
                     # For skins whose required float ≤ threshold we verify real market
                     # depth and update input prices to reflect slippage (you need to buy
                     # N copies, not just the single cheapest).
-                    liquidity_depth: Optional[int] = None
+                    craftability = self._check_contract_craftability(
+                        contract_skins,
+                        is_stattrak=is_st,
+                        allow_unknown_float=False,
+                        allow_refresh=False,
+                    )
+                    if not bool(craftability.get('craftable')):
+                        continue
+
+                    liquidity_depth: Optional[int] = int(craftability.get('min_depth') or 0)
                     liquidity_ok = True
 
                     # Aggregate slots needed per skin name and the strictest (minimum)
@@ -2449,6 +2643,7 @@ class ContractCalculator:
             self._memo_listings.clear()
             self._memo_effective_sell_price.clear()
             self._memo_contract_eval.clear()
+            self._memo_contract_craftability.clear()
             self._memo_collection_avg_outcome_price.clear()
             self._memo_collection_score.clear()
             self._memo_collection_imbalance.clear()
