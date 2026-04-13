@@ -663,6 +663,19 @@ body {
 // ════════════════════════════════════════════════════════════════════════════
 
 const tg = window.Telegram && window.Telegram.WebApp;
+
+// Computes total top padding needed to clear both the device safe area (Dynamic Island)
+// and Telegram's own overlay header (Close button, title bar etc.) in fullscreen mode.
+function _applyTgInsets() {
+  if (!tg) return;
+  try {
+    var safeTop    = parseInt(((tg.safeAreaInsets)        || {}).top || 0, 10);
+    var contentTop = parseInt(((tg.contentSafeAreaInsets) || {}).top || 0, 10);
+    document.documentElement.style.setProperty('--safe-top', (safeTop + contentTop) + 'px');
+    document.body.classList.toggle('fullscreen', !!tg.isFullscreen);
+  } catch(e) {}
+}
+
 if (tg) {
   tg.ready();
   tg.expand();
@@ -671,21 +684,17 @@ if (tg) {
   if (tg.setBackgroundColor) tg.setBackgroundColor('#0d0d0f');
   // Request fullscreen (Bot API 8.0+)
   if (tg.requestFullscreen) tg.requestFullscreen();
-  tg.onEvent('fullscreen_changed', _onFullscreenChange);
-  tg.onEvent('fullscreen_failed', function() {});
+  // Re-apply insets on any change that could affect layout
+  tg.onEvent('fullscreen_changed',       _applyTgInsets);
+  tg.onEvent('fullscreen_failed',        _applyTgInsets);
+  tg.onEvent('safeAreaChanged',          _applyTgInsets);
+  tg.onEvent('contentSafeAreaChanged',   _applyTgInsets);
   // Signal to Telegram that this app handles the back button
   if (tg.BackButton) {
     tg.BackButton.onClick(goHome);
   }
-}
-
-function _onFullscreenChange() {
-  try {
-    var insets = (tg && tg.safeAreaInsets) || {};
-    var top = parseInt(insets.top || 0, 10);
-    document.documentElement.style.setProperty('--safe-top', top + 'px');
-    document.body.classList.toggle('fullscreen', !!(tg && tg.isFullscreen));
-  } catch(e) {}
+  // Apply immediately — values may already be populated at init time
+  _applyTgInsets();
 }
 
 function haptic(style) {
