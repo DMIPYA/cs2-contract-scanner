@@ -1705,6 +1705,20 @@ class ContractCalculator:
 
         refined: List[Dict] = []
         self._multisource_net_pricing = True
+
+        # Threshold below which we perform a real-market liquidity check.
+        # Configurable via env; default 0.035 — skins this clean are rare and expensive.
+        try:
+            _liq_float_threshold = float(os.getenv('HUNT_LIQUIDITY_FLOAT_THRESHOLD', '0.035') or 0.035)
+        except Exception:
+            _liq_float_threshold = 0.035
+        try:
+            _liq_min_depth = int(os.getenv('HUNT_LIQUIDITY_MIN_DEPTH', '30') or 30)
+        except Exception:
+            _liq_min_depth = 30
+        # How many listings to request per skin (must be > min_depth to detect shortfall).
+        _liq_fetch_limit = max(int(_liq_min_depth) + 20, 60)
+
         try:
             try:
                 self.clear_price_memoization()
@@ -1720,6 +1734,86 @@ class ContractCalculator:
                         refined.append(r)
                         continue
 
+                    # ── Liquidity check ──────────────────────────────────────────────
+                    # For skins whose required float ≤ threshold we verify real market
+                    # depth and update input prices to reflect slippage (you need to buy
+                    # N copies, not just the single cheapest).
+                    liquidity_depth: Optional[int] = None
+                    liquidity_ok = True
+
+                    # Aggregate slots needed per skin name and the strictest (minimum)
+                    # float cap required across all lots of that skin.
+                    _skin_slots: Dict[str, int] = {}       # name -> count needed
+                    _skin_max_float: Dict[str, float] = {} # name -> minimum(floats) = strictest cap
+                    for _s in contract_skins:
+                        _nm = str(_s.get('name') or '')
+                        if not _nm:
+                            continue
+                        _f = float(_s.get('float') or 1.0)
+                        _skin_slots[_nm] = _skin_slots.get(_nm, 0) + 1
+                        if _nm not in _skin_max_float or _f < _skin_max_float[_nm]:
+                            _skin_max_float[_nm] = _f
+
+                    # Build a name→index map to update prices after slippage calculation
+                    _skin_real_prices: Dict[str, List[float]] = {} # name -> sorted real prices
+
+                    for _skin_nm, _count_needed in _skin_slots.items():
+                        _strictest_float = _skin_max_float.get(_skin_nm, 1.0)
+                        if _strictest_float > float(_liq_float_threshold) + 1e-9:
+                            # Normal float — no liquidity concern, keep original price
+                            continue
+
+                        try:
+                            _listings = self.price_manager.get_listings(
+                                _skin_nm,
+                                max_float=float(_strictest_float),
+                                exclude_stattrak=not bool(is_st),
+                                require_stattrak=bool(is_st),
+                                limit=int(_liq_fetch_limit),
+                            )
+                        except Exception:
+                            _listings = []
+
+                        _depth = len(_listings) if _listings else 0
+
+                        # Track minimum depth across all low-float skins
+                        if liquidity_depth is None or _depth < liquidity_depth:
+                            liquidity_depth = _depth
+
+                        if _depth < int(_liq_min_depth):
+                            liquidity_ok = False
+                            break
+
+                        # Collect the real prices for the N lots we need to buy
+                        if _listings and _count_needed > 0:
+                            _real_prices = [float(_l[0]) for _l in _listings[:_count_needed]]
+                            _skin_real_prices[_skin_nm] = _real_prices
+
+                    if not liquidity_ok:
+                        continue
+
+                    # Slippage: update input_skins prices with real market prices so that
+                    # _calculate_contract_profit reflects the true cost of assembling the contract.
+                    if _skin_real_prices:
+                        _price_iter: Dict[str, int] = {}  # name -> how many we've assigned
+                        updated_skins = []
+                        for _s in contract_skins:
+                            _nm = str(_s.get('name') or '')
+                            if _nm in _skin_real_prices:
+                                _idx = _price_iter.get(_nm, 0)
+                                _real_p_list = _skin_real_prices[_nm]
+                                if _idx < len(_real_p_list):
+                                    _s2 = dict(_s)
+                                    _s2['price'] = float(_real_p_list[_idx])
+                                    updated_skins.append(_s2)
+                                    _price_iter[_nm] = _idx + 1
+                                else:
+                                    updated_skins.append(dict(_s))
+                            else:
+                                updated_skins.append(dict(_s))
+                        contract_skins = updated_skins
+                    # ── End liquidity check ──────────────────────────────────────────
+
                     refined_inputs = self._refine_contract_inputs(contract_skins, is_stattrak=is_st)
                     if refined_inputs:
                         contract_skins = refined_inputs
@@ -1728,6 +1822,8 @@ class ContractCalculator:
                     out = dict(r)
                     out['input_skins'] = contract_skins
                     out.update(cd)
+                    if liquidity_depth is not None:
+                        out['liquidity_depth'] = int(liquidity_depth)
                     refined.append(out)
                 except Exception:
                     refined.append(r)
