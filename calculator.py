@@ -26,6 +26,7 @@ class ContractResult:
     collection_name: str
     input_skins: List[str]
     max_average_float: float = 0.0
+    wear_leap_info: Optional[Dict] = None
 
 
 @dataclass
@@ -1092,6 +1093,11 @@ class ContractCalculator:
         except Exception:
             jackpot_min_ev_ratio = 0.5
 
+        try:
+            require_craftable = str(os.getenv('HUNT_REQUIRE_CRAFTABLE', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
+        except Exception:
+            require_craftable = True
+
         broad_csfloat_prev_enabled = None
         try:
             cfc = getattr(self.price_manager, 'csfloat_client', None)
@@ -1406,15 +1412,21 @@ class ContractCalculator:
 
                             rarity_stats['contracts_built'] = int(rarity_stats.get('contracts_built') or 0) + 1
 
-                            craftability = self._check_contract_craftability(
-                                contract,
-                                is_stattrak=is_stattrak,
-                                allow_unknown_float=False,
-                                allow_refresh=False,
-                            )
-                            if not bool(craftability.get('craftable')):
-                                continue
-                            rarity_stats['contracts_craftable'] = int(rarity_stats.get('contracts_craftable') or 0) + 1
+                            craftability = {
+                                'craftable': True,
+                                'min_depth': 0,
+                                'reason': 'skipped',
+                            }
+                            if bool(require_craftable):
+                                craftability = self._check_contract_craftability(
+                                    contract,
+                                    is_stattrak=is_stattrak,
+                                    allow_unknown_float=False,
+                                    allow_refresh=False,
+                                )
+                                if not bool(craftability.get('craftable')):
+                                    continue
+                                rarity_stats['contracts_craftable'] = int(rarity_stats.get('contracts_craftable') or 0) + 1
 
                             if prof:
                                 prof_totals['contracts_built'] = int(prof_totals.get('contracts_built') or 0) + 1
@@ -1923,16 +1935,17 @@ class ContractCalculator:
                     # For skins whose required float ≤ threshold we verify real market
                     # depth and update input prices to reflect slippage (you need to buy
                     # N copies, not just the single cheapest).
-                    craftability = self._check_contract_craftability(
-                        contract_skins,
-                        is_stattrak=is_st,
-                        allow_unknown_float=False,
-                        allow_refresh=False,
-                    )
-                    if not bool(craftability.get('craftable')):
-                        continue
-
-                    liquidity_depth: Optional[int] = int(craftability.get('min_depth') or 0)
+                    liquidity_depth: Optional[int] = None
+                    if bool(require_craftable):
+                        craftability = self._check_contract_craftability(
+                            contract_skins,
+                            is_stattrak=is_st,
+                            allow_unknown_float=False,
+                            allow_refresh=False,
+                        )
+                        if not bool(craftability.get('craftable')):
+                            continue
+                        liquidity_depth = int(craftability.get('min_depth') or 0)
                     liquidity_ok = True
 
                     # Aggregate slots needed per skin name and the strictest (minimum)
@@ -2815,16 +2828,6 @@ class ContractCalculator:
         # Целевая редкость должна быть на 1 уровень выше
         target_level = rarity_hierarchy.get(target_rarity, -1)
         return target_level == max_input_level + 1
-        
-        # Исходы могут быть на 1-2 уровня выше
-        target_level = min(avg_level + 1, max(self.rarities_hierarchy.values()))
-        
-        # Находим название грейда по уровню
-        for rarity, level in self.rarities_hierarchy.items():
-            if level >= target_level:
-                return rarity
-        
-        return "Covert"
     
     def _get_possible_outcomes(self, collection_name: str, min_rarity: str) -> List[SkinData]:
         """Получить возможные исходы для коллекции с грейдом >= min_rarity"""
@@ -3383,7 +3386,15 @@ class ContractCalculator:
                     'hunt_expected_wear': self._determine_best_achievable_wear(float(contract_data.get('average_float') or 0.0)),
                     'hunt_input_rarity': input_rarity,
                     'hunt_filler_collection': "+".join(used_collections) if used_collections else None,
-                    'hunt_filler_outcomes': self._get_next_grade_skins_count(used_collections[0], input_rarity, is_stattrak) if used_collections else None,
+                    'hunt_filler_outcomes': (
+                        min(
+                            self._get_next_grade_skins_count(c, input_rarity, is_stattrak)
+                            for c in used_collections
+                            if c != target_collection
+                        )
+                        if any(c != target_collection for c in used_collections)
+                        else None
+                    ),
                     'risk_ratio': float(risk_metrics.get('risk_ratio') or 0.0),
                     'fail_probability': float(risk_metrics.get('fail_probability') or 0.0),
                     'avg_fail_value_after_fee': float(risk_metrics.get('avg_fail_value_after_fee') or 0.0),
