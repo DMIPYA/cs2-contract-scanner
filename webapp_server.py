@@ -34,24 +34,33 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from bot_service import TargetHuntingService
+from database import Database
 
 
 # ── Service singleton ────────────────────────────────────────────────────────
 
 _svc_lock = threading.Lock()
 _svc: Optional[TargetHuntingService] = None
+_db: Optional[Database] = None
 
 
 def _get_svc() -> TargetHuntingService:
-    global _svc
+    global _svc, _db
     with _svc_lock:
         if _svc is None:
             logger.info('Initializing TargetHuntingService for webapp...')
             svc = TargetHuntingService()
             svc.initialize()
             _svc = svc
+            _db = svc.calculator.database if hasattr(svc, 'calculator') else None
             logger.info('TargetHuntingService initialized.')
     return _svc
+
+
+def _get_db() -> Optional[Database]:
+    """Get database instance from service"""
+    _get_svc()  # Ensure service is initialized
+    return _db
 
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
@@ -150,6 +159,30 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
     summary = _serialize_contract_summary(idx, c)
 
     ins = list(c.get('input_skins') or [])
+    
+    # Calculate max allowed average float for inputs
+    # This is the maximum average real float that keeps the target quality
+    target_max_avg_norm = c.get('target_max_avg_float', 0.07)  # normalized value
+    max_allowed_avg_float = None
+    
+    db = _get_db()
+    if ins and target_max_avg_norm is not None and db:
+        # Denormalize for each input skin and calculate average
+        denorm_floats = []
+        for s in ins:
+            skin_name = s.get('name', '')
+            if skin_name:
+                skin_data = db.get_skin_by_name(skin_name)
+                if skin_data:
+                    min_f = float(skin_data.min_float)
+                    max_f = float(skin_data.max_float)
+                    # Denormalize: real_float = norm * (max - min) + min
+                    denorm_float = target_max_avg_norm * (max_f - min_f) + min_f
+                    denorm_floats.append(denorm_float)
+        
+        if denorm_floats:
+            max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
+    
     # Group inputs by (name, wear, collection)
     from collections import OrderedDict
     groups: OrderedDict = OrderedDict()
@@ -240,6 +273,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         'input_groups': input_groups,
         'outcomes': outcomes,
         'total_inputs': len(ins),
+        'max_allowed_avg_float': max_allowed_avg_float,
     })
     return detail
 

@@ -1086,13 +1086,14 @@ function renderDetailFull(c) {
   // Group inputs by (name, wear, collection)
   const inputsList = document.getElementById('d-inputs-list');
   const groups = c.input_groups || [];
+  const maxAllowedFloat = c.max_allowed_avg_float; // Maximum allowed average float for all inputs
   if (groups.length === 0) {
     inputsList.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px 0">No input data</div>';
   } else {
     inputsList.innerHTML = groups.map((g, gIdx) => {
       const rangeLabel = g.start === g.end ? `${String(g.start).padStart(2,'0')}` : `${String(g.start).padStart(2,'0')}–${String(g.end).padStart(2,'0')}`;
       const perItemTxt = g.count > 1 ? ` · $${fmt$(g.per_item)} ea` : '';
-      const floatTxt = g.avg_float != null ? `max float ${g.avg_float.toFixed(4)}` : '';
+      const floatTxt = maxAllowedFloat != null ? `max float ${maxAllowedFloat.toFixed(4)}` : '';
       return `
 <div class="input-item" data-gidx="${gIdx}">
   <div class="input-idx">${rangeLabel}</div>
