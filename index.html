@@ -572,15 +572,6 @@ body {
 
 
   <div id="screen-detail" class="screen">
-    <!-- Dropdown for individual skins -->
-    <div id="skins-dropdown" style="display:none; position:fixed; z-index:100; background:var(--surface3); border:1px solid var(--border2); border-radius:4px; padding:10px; width:220px; box-shadow:0 4px 12px rgba(0,0,0,0.5); font-family:'Share Tech Mono', monospace;">
-      <div style="font-size:10px; color:var(--text3); text-transform:uppercase; margin-bottom:8px; border-bottom:1px solid var(--border); padding-bottom:4px; display:flex; justify-content:space-between;">
-        <span>Individual Skins</span>
-        <span id="close-dropdown" style="cursor:pointer; color:var(--red);">[X]</span>
-      </div>
-      <div id="skins-dropdown-list" style="max-height:200px; overflow-y:auto; scrollbar-width:none;"></div>
-    </div>
-
     <!-- Header -->
     <div class="detail-header">
       <div class="back-btn" id="back-btn">
@@ -605,10 +596,6 @@ body {
         <div class="metric-cell">
           <div class="metric-lbl">ROI</div>
           <div class="metric-val green" id="d-roi"></div>
-        </div>
-        <div class="metric-cell">
-          <div class="metric-lbl">Max Avg</div>
-          <div class="metric-val orange" id="d-max-float"></div>
         </div>
         <div class="metric-cell">
           <div class="metric-lbl">Cost</div>
@@ -754,53 +741,12 @@ function showScreen(id) {
 
 function goHome() {
   haptic('light');
-  hideSkinsDropdown();
   showScreen('screen-home');
 }
 
 document.getElementById('back-btn').addEventListener('click', goHome);
 
-// ── SKINS DROPDOWN ──
-function showSkinsDropdown(group, event) {
-  haptic('light');
-  const dropdown = document.getElementById('skins-dropdown');
-  const list = document.getElementById('skins-dropdown-list');
-  
-  const skins = group.individual_skins || [];
-  list.innerHTML = skins.map((s, i) => `
-    <div style="display:flex; justify-content:space-between; font-size:11px; padding:4px 0; border-bottom:1px solid var(--surface2);">
-      <span style="color:var(--text4);">${String(i+1).padStart(2,'0')}</span>
-      <span style="color:var(--text2);">${s.float ? s.float.toFixed(5) : '—'}</span>
-      <span style="color:var(--orange);">$${fmt$(s.price)}</span>
-    </div>
-  `).join('');
-  
-  // Position dropdown near the click but keep it within view
-  dropdown.style.display = 'block';
-  const rect = event.currentTarget.getBoundingClientRect();
-  let top = rect.bottom + 5;
-  if (top + dropdown.offsetHeight > window.innerHeight) {
-    top = rect.top - dropdown.offsetHeight - 5;
-  }
-  dropdown.style.top = top + 'px';
-  dropdown.style.left = Math.max(10, Math.min(window.innerWidth - 230, rect.left)) + 'px';
-  
-  // Close on outside click
-  const closeHandler = (e) => {
-    if (!dropdown.contains(e.target) && e.target !== event.currentTarget) {
-      hideSkinsDropdown();
-      document.removeEventListener('click', closeHandler);
-    }
-  };
-  setTimeout(() => document.addEventListener('click', closeHandler), 10);
-}
-
-function hideSkinsDropdown() {
-  document.getElementById('skins-dropdown').style.display = 'none';
-}
-
-document.getElementById('close-dropdown').onclick = hideSkinsDropdown;
-
+// ════════════════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════════════════
 // TOAST
 // ════════════════════════════════════════════════════════════════════════════
@@ -1146,9 +1092,9 @@ function renderDetailFull(c) {
     inputsList.innerHTML = groups.map((g, gIdx) => {
       const rangeLabel = g.start === g.end ? `${String(g.start).padStart(2,'0')}` : `${String(g.start).padStart(2,'0')}–${String(g.end).padStart(2,'0')}`;
       const perItemTxt = g.count > 1 ? ` · $${fmt$(g.per_item)} ea` : '';
-      const floatTxt = g.avg_float != null ? `avg float ${g.avg_float.toFixed(4)}` : '';
+      const floatTxt = g.avg_float != null ? `max float ${g.avg_float.toFixed(4)}` : '';
       return `
-<div class="input-item group-clickable" data-gidx="${gIdx}" style="cursor:pointer">
+<div class="input-item" data-gidx="${gIdx}">
   <div class="input-idx">${rangeLabel}</div>
   <div class="input-info">
     <div class="input-name">${escHtml(g.name)}</div>
@@ -1160,21 +1106,9 @@ function renderDetailFull(c) {
   </div>
 </div>`;
     }).join('');
-
-    // Add click listeners for groups
-    inputsList.querySelectorAll('.group-clickable').forEach(el => {
-      el.addEventListener('click', (e) => {
-        const gIdx = parseInt(el.dataset.gidx);
-        const group = groups[gIdx];
-        showSkinsDropdown(group, e);
-      });
-    });
   }
 
-  // Max Float display
-  const maxF = c.max_avg_float;
-  document.getElementById('d-max-float').textContent = maxF ? maxF.toFixed(4) : '—';
-  document.getElementById('d-max-float').style.color = 'var(--gold)';
+
 
   // Outcomes
   const outcomesList = document.getElementById('d-outcomes-list');
