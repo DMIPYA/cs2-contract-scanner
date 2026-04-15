@@ -2025,6 +2025,18 @@ class ContractCalculator:
                     if refined_inputs:
                         contract_skins = refined_inputs
 
+                    # ── Float optimization (pushing to the edge of quality) ──────────
+                    try:
+                        optimize_floats = str(os.getenv('HUNT_OPTIMIZE_FLOATS', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
+                        if optimize_floats:
+                            target_wear = str(r.get('hunt_target_wear') or 'Factory New')
+                            optimized_skins = self._optimize_contract_floats(contract_skins, target_wear=target_wear, is_stattrak=is_st)
+                            if optimized_skins:
+                                contract_skins = optimized_skins
+                    except Exception:
+                        pass
+                    # ── End float optimization ───────────────────────────────────────
+
                     cd = self._calculate_contract_profit(contract_skins, target_collection, is_st)
                     out = dict(r)
                     out['input_skins'] = contract_skins
@@ -2128,6 +2140,136 @@ class ContractCalculator:
             except Exception:
                 out.append(dict(s))
         return out if changed else None
+
+    def _optimize_contract_floats(self, contract_skins: List[Dict], *, target_wear: str, is_stattrak: bool) -> Optional[List[Dict]]:
+        """
+        Optimizes the contract by finding the cheapest skins that keep the output float 
+        at the edge of the target quality (e.g., ~0.0699 for Factory New).
+        """
+        if not contract_skins or len(contract_skins) != 10:
+            return None
+
+        wear_thresholds = {
+            'Factory New': 0.07,
+            'Minimal Wear': 0.15,
+            'Field-Tested': 0.38,
+            'Well-Worn': 0.45,
+            'Battle-Scarred': 1.0,
+        }
+        
+        target_max_avg_norm = float(wear_thresholds.get(target_wear, 0.07))
+        # Safety margin: aim for 99.8% of the threshold to avoid rounding issues
+        safe_target_avg_norm = target_max_avg_norm * 0.998
+        
+        current_skins = [dict(s) for s in contract_skins]
+        
+        # Calculate current total weighted normalized float
+        # out_float = avg_norm * (max_f - min_f) + min_f
+        # We need to solve for avg_norm such that out_float <= threshold for ALL possible outcomes.
+        # But wait, the system uses average_normalized_float (avg_norm) across all inputs.
+        # Each output has its own [min_f, max_f].
+        
+        outcomes = self.calculate_contract_outcomes_details(current_skins, is_stattrak=is_stattrak)
+        if not outcomes:
+            return None
+
+        # Determine the bottleneck: which outcome hits the threshold first?
+        # out_float_i = avg_norm * (max_i - min_i) + min_i
+        # avg_norm = (out_float_i - min_i) / (max_i - min_i)
+        
+        limit_avg_norm = 1.0
+        for o in outcomes:
+            min_f = float(o.get('min_float', 0.0))
+            max_f = float(o.get('max_float', 1.0))
+            denom = max_f - min_f
+            if denom > 1e-9:
+                # Max allowed avg_norm for this specific outcome to stay within target_wear
+                # (threshold - min_f) / (max_f - min_f)
+                max_norm_for_this = (target_max_avg_norm - min_f) / denom
+                if max_norm_for_this < limit_avg_norm:
+                    limit_avg_norm = max_norm_for_this
+
+        # Apply safety margin to the bottleneck avg_norm
+        target_avg_norm = max(0.0, limit_avg_norm * 0.998)
+        
+        # We want sum(norm_floats) / 10 <= target_avg_norm
+        target_total_norm = target_avg_norm * 10.0
+        
+        # Sort skins by price (descending) or by how much we can "worsen" them?
+        # Let's try to worsen the most expensive skins first to get the most profit.
+        indexed_skins = list(enumerate(current_skins))
+        
+        changed = False
+        
+        # We will iterate and try to replace each skin with a cheaper one that has a higher float,
+        # but keep the total normalized float below target_total_norm.
+        
+        for i, skin in indexed_skins:
+            nm = str(skin.get('name', ''))
+            skin_data = self.database.get_skin_by_name(nm)
+            if not skin_data:
+                continue
+            
+            try:
+                min_f = float(skin_data.min_float)
+                max_f = float(skin_data.max_float)
+            except Exception:
+                continue
+                
+            if max_f <= min_f + 1e-9:
+                continue
+
+            # Current normalized float of this skin
+            curr_f = float(skin.get('float', 0.0))
+            curr_norm = (curr_f - min_f) / (max_f - min_f)
+            
+            # Other skins total norm
+            other_total_norm = sum((float(s.get('float', 0.0)) - float(self.database.get_skin_by_name(s['name']).min_float)) / 
+                                   (float(self.database.get_skin_by_name(s['name']).max_float) - float(self.database.get_skin_by_name(s['name']).min_float))
+                                   for j, s in enumerate(current_skins) if i != j)
+            
+            # Max allowed norm for THIS skin
+            max_norm_allowed = target_total_norm - other_total_norm
+            if max_norm_allowed > 1.0:
+                max_norm_allowed = 1.0
+            
+            if max_norm_allowed <= curr_norm + 1e-4:
+                # Already at the limit or no room to worsen
+                continue
+                
+            # Convert back to actual float
+            max_actual_float = max_norm_allowed * (max_f - min_f) + min_f
+            
+            # Find the best (cheapest) skin on the market with float <= max_actual_float
+            # and hopefully float > curr_f
+            try:
+                pm = self.price_manager
+                if hasattr(pm, 'get_best_buy_with_float'):
+                    # We look for a skin that is potentially cheaper than current
+                    # but has a higher float (up to max_actual_float)
+                    best = pm.get_best_buy_with_float(
+                        nm,
+                        target_wear=None, # Any wear that fits the float
+                        max_float=max_actual_float,
+                        exclude_stattrak=not bool(is_stattrak),
+                        require_stattrak=bool(is_stattrak),
+                    )
+                    
+                    if best:
+                        new_price, new_flt, new_wear, src = best
+                        if float(new_price) < float(skin.get('price', 0.0)) - 0.01:
+                            # Found a cheaper one!
+                            current_skins[i].update({
+                                'price': float(new_price),
+                                'float': float(new_flt),
+                                'wear': str(new_wear),
+                                'buy_source': str(src)
+                            })
+                            changed = True
+            except Exception:
+                continue
+
+        return current_skins if changed else None
 
     def find_target_hunting_optimized(
         self,
