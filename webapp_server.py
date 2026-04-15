@@ -34,14 +34,14 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from bot_service import TargetHuntingService
-from database import Database
+from database import CS2Database
 
 
 # ── Service singleton ────────────────────────────────────────────────────────
 
 _svc_lock = threading.Lock()
 _svc: Optional[TargetHuntingService] = None
-_db: Optional[Database] = None
+_db: Optional[CS2Database] = None
 
 
 def _get_svc() -> TargetHuntingService:
@@ -57,7 +57,7 @@ def _get_svc() -> TargetHuntingService:
     return _svc
 
 
-def _get_db() -> Optional[Database]:
+def _get_db() -> Optional[CS2Database]:
     """Get database instance from service"""
     _get_svc()  # Ensure service is initialized
     return _db
