@@ -2192,6 +2192,10 @@ class ContractCalculator:
         # Apply safety margin to the bottleneck avg_norm
         target_avg_norm = max(0.0, limit_avg_norm * 0.998)
         
+        # Store the target max avg float in the contract dict for UI
+        for s in current_skins:
+            s['target_max_avg_float'] = round(target_avg_norm, 6)
+        
         # We want sum(norm_floats) / 10 <= target_avg_norm
         target_total_norm = target_avg_norm * 10.0
         

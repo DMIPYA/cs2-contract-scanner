@@ -140,6 +140,8 @@ def _serialize_contract_summary(idx: int, c: dict) -> dict:
         'rarity': rarity,
         'input_wears': wears_seen,
         'expected_wear': str(c.get('hunt_expected_wear') or ''),
+        'target_wear': str(c.get('hunt_target_wear') or ''),
+        'max_avg_float': round(float(c.get('target_max_avg_float') or 0.0), 4) if c.get('target_max_avg_float') else None,
     }
 
 
@@ -166,19 +168,26 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                 'count': 0,
                 'total_price': 0.0,
                 'floats': [],
+                'individual_skins': [],
             }
             groups[key] = g
         g['count'] += 1
+        price = 0.0
         try:
-            g['total_price'] += float(s.get('price') or 0.0)
+            price = float(s.get('price') or 0.0)
+            g['total_price'] += price
         except Exception:
             pass
-        try:
-            fl = s.get('float')
-            if fl is not None:
-                g['floats'].append(float(fl))
-        except Exception:
-            pass
+        
+        fl = s.get('float')
+        fl_val = float(fl) if fl is not None else None
+        if fl_val is not None:
+            g['floats'].append(fl_val)
+            
+        g['individual_skins'].append({
+            'float': fl_val,
+            'price': price,
+        })
 
     input_groups = []
     pos = 1
@@ -190,6 +199,12 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         if g['floats']:
             avg_float = round(sum(g['floats']) / len(g['floats']), 4)
         per_item = round(g['total_price'] / max(g['count'], 1), 2)
+        
+        # Determine max allowed float for this skin to keep quality
+        # This is a bit complex as it depends on other skins, 
+        # but we can show the theoretical max for this skin given the target_wear.
+        # However, the user asked for "max float (max allowed quality)" in contract details.
+        
         input_groups.append({
             'start': start_i,
             'end': end_i,
@@ -201,6 +216,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
             'total_price': round(g['total_price'], 2),
             'per_item': per_item,
             'avg_float': avg_float,
+            'individual_skins': g['individual_skins'],
         })
 
     # Outcomes
