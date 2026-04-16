@@ -160,28 +160,66 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
 
     ins = list(c.get('input_skins') or [])
     
-    # Calculate max allowed average float for inputs
-    # This is the maximum average real float that keeps the target quality
-    target_max_avg_norm = c.get('target_max_avg_float', 0.07)  # normalized value
+    # Calculate max allowed average float for inputs based on target wear
+    # This shows the maximum average float that keeps the target skin quality
     max_allowed_avg_float = None
     
+    target_wear = c.get('hunt_target_wear') or c.get('expected_wear')
+    target_skin_name = c.get('hunt_output') or c.get('name')
+    
     db = _get_db()
-    if ins and target_max_avg_norm is not None and db:
-        # Denormalize for each input skin and calculate average
-        denorm_floats = []
-        for s in ins:
-            skin_name = s.get('name', '')
-            if skin_name:
-                skin_data = db.get_skin_by_name(skin_name)
-                if skin_data:
-                    min_f = float(skin_data.min_float)
-                    max_f = float(skin_data.max_float)
-                    # Denormalize: real_float = norm * (max - min) + min
-                    denorm_float = target_max_avg_norm * (max_f - min_f) + min_f
-                    denorm_floats.append(denorm_float)
+    if target_wear and target_skin_name and db:
+        # Wear boundaries (upper limit for each quality, exclusive)
+        # FN: [0.00, 0.07), MW: [0.07, 0.15), FT: [0.15, 0.38), WW: [0.38, 0.45), BS: [0.45, 1.00]
+        wear_upper_limits = {
+            'Factory New': 0.07,
+            'Minimal Wear': 0.15,
+            'Field-Tested': 0.38,
+            'Well-Worn': 0.45,
+            'Battle-Scarred': 1.00,
+        }
         
-        if denorm_floats:
-            max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
+        # Get the upper boundary for target wear (exclusive, so we use slightly less)
+        target_boundary = wear_upper_limits.get(target_wear, 0.07)
+        # Use a small epsilon to ensure we stay below the boundary
+        if target_wear != 'Battle-Scarred':
+            target_boundary = target_boundary - 0.0001
+        
+        # Get target skin data to understand its float range
+        target_skin = db.get_skin_by_name(target_skin_name)
+        if target_skin:
+            target_min = float(target_skin.min_float)
+            target_max = float(target_skin.max_float)
+            
+            # Clamp target_boundary to skin's actual range
+            target_boundary = min(target_boundary, target_max)
+            target_boundary = max(target_boundary, target_min)
+            
+            # The output float formula: out_float = avg_norm * (target_max - target_min) + target_min
+            # We need: out_float < target_boundary (strictly less for non-BS)
+            # So: avg_norm * (target_max - target_min) + target_min < target_boundary
+            # avg_norm < (target_boundary - target_min) / (target_max - target_min)
+            
+            if target_max > target_min:
+                max_avg_norm = (target_boundary - target_min) / (target_max - target_min)
+                max_avg_norm = min(1.0, max(0.0, max_avg_norm))
+                
+                # Now denormalize this for input skins to get real float values
+                if ins:
+                    denorm_floats = []
+                    for s in ins:
+                        skin_name = s.get('name', '')
+                        if skin_name:
+                            skin_data = db.get_skin_by_name(skin_name)
+                            if skin_data:
+                                min_f = float(skin_data.min_float)
+                                max_f = float(skin_data.max_float)
+                                # Denormalize: real_float = norm * (max - min) + min
+                                denorm_float = max_avg_norm * (max_f - min_f) + min_f
+                                denorm_floats.append(denorm_float)
+                    
+                    if denorm_floats:
+                        max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
     
     # Group inputs by (name, wear, collection)
     from collections import OrderedDict
