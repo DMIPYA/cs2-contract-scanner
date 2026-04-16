@@ -2037,6 +2037,17 @@ class ContractCalculator:
                         pass
                     # ── End float optimization ───────────────────────────────────────
 
+                    # ── FN Liquidity validation ──────────────────────────────────────
+                    try:
+                        fn_liquidity_check = str(os.getenv('HUNT_FN_LIQUIDITY_CHECK', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
+                        if fn_liquidity_check:
+                            if not self._validate_fn_contract_liquidity(contract_skins, is_stattrak=is_st):
+                                # Contract failed FN liquidity check, skip it
+                                continue
+                    except Exception:
+                        pass
+                    # ── End FN liquidity validation ───────────────────────────────────
+
                     cd = self._calculate_contract_profit(contract_skins, target_collection, is_st)
                     out = dict(r)
                     out['input_skins'] = contract_skins
@@ -2087,6 +2098,135 @@ class ContractCalculator:
         except Exception:
             pass
         return merged[: int(max_results)]
+
+    def _validate_fn_contract_liquidity(self, contract_skins: List[Dict], *, is_stattrak: bool) -> bool:
+        """
+        Validates that FN contracts have sufficient liquidity on the market.
+        Checks if required FN skins are available in needed quantities and price ranges.
+        Returns False if contract should be filtered out due to liquidity issues.
+        """
+        if not contract_skins:
+            return True
+            
+        # Check if contract has FN skins
+        fn_skins = [s for s in contract_skins if s.get('wear') == 'Factory New']
+        if not fn_skins:
+            return True  # No FN skins, no need to check
+            
+        try:
+            # Calculate expected value for comparison
+            cd = self._calculate_contract_profit(contract_skins, None, is_stattrak)
+            expected_value = float(cd.get('expected_output', 0.0))
+            if expected_value <= 0:
+                return False
+                
+            total_required_cost = 0.0
+            liquidity_issues = 0
+            
+            # Group skins by name to check required quantities and max float
+            from collections import defaultdict
+            skin_requirements = defaultdict(lambda: {'count': 0, 'max_float': 0.0, 'total_budget': 0.0})
+            
+            for s in fn_skins:
+                skin_name = s.get('name', '')
+                if skin_name:
+                    skin_float = float(s.get('float', 0.07))
+                    skin_price = float(s.get('price', 0.0))
+                    
+                    req = skin_requirements[skin_name]
+                    req['count'] += 1
+                    req['max_float'] = max(req['max_float'], skin_float)
+                    req['total_budget'] += skin_price
+            
+            # Check liquidity for each required FN skin
+            for skin_name, req in skin_requirements.items():
+                required_count = req['count']
+                max_float = req['max_float']
+                budget_per_skin = req['total_budget'] / required_count
+                
+                try:
+                    # Get current market depth for this FN skin with float constraint
+                    pm = self.price_manager
+                    if hasattr(pm, 'get_liquidity_metrics'):
+                        liquidity = pm.get_liquidity_metrics(
+                            skin_name,
+                            target_wear='Factory New',
+                            max_float=max_float,  # Important: respect float constraint
+                            exclude_stattrak=not bool(is_stattrak),
+                            require_stattrak=bool(is_stattrak),
+                            depth_n=required_count * 3,  # Check 3x the required amount for safety
+                        )
+                        
+                        available_count = liquidity.get('depth', 0)
+                        avg_price = liquidity.get('average_price', 0.0)
+                        
+                        # Check if we have enough skins available
+                        if available_count < required_count:
+                            liquidity_issues += 1
+                            continue
+                            
+                        # Check if the price is reasonable (within budget + 10% margin)
+                        if avg_price > budget_per_skin * 1.1:
+                            liquidity_issues += 1
+                            continue
+                            
+                        total_required_cost += avg_price * required_count
+                        
+                    else:
+                        # Fallback: try to get individual prices
+                        skin_cost = 0.0
+                        available_skins = 0
+                        
+                        if hasattr(pm, 'get_best_buy_with_float'):
+                            # Try to find required number of skins
+                            for _ in range(required_count * 2):  # Check more than needed
+                                best = pm.get_best_buy_with_float(
+                                    skin_name,
+                                    target_wear='Factory New',
+                                    max_float=max_float,
+                                    exclude_stattrak=not bool(is_stattrak),
+                                    require_stattrak=bool(is_stattrak),
+                                )
+                                if not best:
+                                    break
+                                    
+                                price, flt, _, _ = best
+                                if flt is not None and float(flt) <= max_float:
+                                    available_skins += 1
+                                    if available_skins <= required_count:
+                                        skin_cost += float(price)
+                                        
+                            if available_skins < required_count:
+                                liquidity_issues += 1
+                                continue
+                                
+                            avg_cost = skin_cost / required_count
+                            if avg_cost > budget_per_skin * 1.1:
+                                liquidity_issues += 1
+                                continue
+                                
+                            total_required_cost += skin_cost
+                        else:
+                            liquidity_issues += 1
+                            
+                except Exception:
+                    liquidity_issues += 1
+                    continue
+            
+            # If we have liquidity issues, reject the contract
+            if liquidity_issues > 0:
+                return False
+                
+            # Check if total cost exceeds expected value (unprofitable)
+            total_contract_cost = sum(float(s.get('price', 0.0)) for s in contract_skins)
+            if total_required_cost >= expected_value * 0.90:  # 10% margin for profit
+                return False
+                
+            return True
+            
+        except Exception:
+            # If we can't validate, be conservative and reject FN contracts
+            return False
 
     def _refine_contract_inputs(self, contract_skins: List[Dict], *, is_stattrak: bool) -> Optional[List[Dict]]:
         """Re-select cheaper buy lots across sources but preserve float constraints by capping max_float to the original lot's float."""

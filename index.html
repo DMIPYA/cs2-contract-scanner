@@ -1087,13 +1087,20 @@ function renderDetailFull(c) {
   const inputsList = document.getElementById('d-inputs-list');
   const groups = c.input_groups || [];
   const maxAllowedFloat = c.max_allowed_avg_float; // Maximum allowed average float for all inputs
+  const maxAllowedWear = c.max_allowed_wear; // Maximum allowed wear quality
   if (groups.length === 0) {
     inputsList.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px 0">No input data</div>';
   } else {
     inputsList.innerHTML = groups.map((g, gIdx) => {
       const rangeLabel = g.start === g.end ? `${String(g.start).padStart(2,'0')}` : `${String(g.start).padStart(2,'0')}–${String(g.end).padStart(2,'0')}`;
       const perItemTxt = g.count > 1 ? ` · $${fmt$(g.per_item)} ea` : '';
-      const floatTxt = maxAllowedFloat != null ? `max float ${maxAllowedFloat.toFixed(4)}` : '';
+      // Show max allowed wear and float
+      let qualityInfo = '';
+      if (maxAllowedWear && maxAllowedFloat != null) {
+        qualityInfo = `max ${maxAllowedWear} (${maxAllowedFloat.toFixed(4)})`;
+      } else if (maxAllowedFloat != null) {
+        qualityInfo = `max float ${maxAllowedFloat.toFixed(4)}`;
+      }
       return `
 <div class="input-item" data-gidx="${gIdx}">
   <div class="input-idx">${rangeLabel}</div>
@@ -1103,7 +1110,7 @@ function renderDetailFull(c) {
   </div>
   <div class="input-right">
     <div class="input-price">$${fmt$(g.total_price)}</div>
-    <div class="input-float">${escHtml(floatTxt)}${perItemTxt}</div>
+    <div class="input-float">${escHtml(qualityInfo)}${perItemTxt}</div>
   </div>
 </div>`;
     }).join('');

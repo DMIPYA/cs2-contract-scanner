@@ -163,6 +163,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
     # Calculate max allowed average float for inputs based on target wear
     # This shows the maximum average float that keeps the target skin quality
     max_allowed_avg_float = None
+    max_allowed_wear = None
     
     target_wear = c.get('hunt_target_wear') or c.get('expected_wear')
     target_skin_name = c.get('hunt_output') or c.get('name')
@@ -218,6 +219,21 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                                 denorm_float = max_avg_norm * (max_f - min_f) + min_f
                                 denorm_floats.append(denorm_float)
                     
+                    if denorm_floats:
+                        max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
+                        
+                        # Determine wear quality based on max allowed float
+                        if max_allowed_avg_float < 0.07:
+                            max_allowed_wear = 'Factory New'
+                        elif max_allowed_avg_float < 0.15:
+                            max_allowed_wear = 'Minimal Wear'
+                        elif max_allowed_avg_float < 0.38:
+                            max_allowed_wear = 'Field-Tested'
+                        elif max_allowed_avg_float < 0.45:
+                            max_allowed_wear = 'Well-Worn'
+                        else:
+                            max_allowed_wear = 'Battle-Scarred'
+    
                     if denorm_floats:
                         max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
     
@@ -312,6 +328,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         'outcomes': outcomes,
         'total_inputs': len(ins),
         'max_allowed_avg_float': max_allowed_avg_float,
+        'max_allowed_wear': max_allowed_wear,
     })
     return detail
 
