@@ -24,24 +24,41 @@ def run():
     # Wait a bit for the web server to bind to the port
     time.sleep(5)
     
-    print("--- Launching Telegram Bot ---")
-    bot_proc = subprocess.Popen([sys.executable, "telegram_bot.py"])
+    # Check if Telegram token is valid before starting bot
+    telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    bot_proc = None
+    
+    if telegram_token and len(telegram_token) > 10:
+        print("--- Launching Telegram Bot ---")
+        try:
+            bot_proc = subprocess.Popen([sys.executable, "telegram_bot.py"])
+        except Exception as e:
+            print(f"Failed to start Telegram Bot: {e}")
+            print("Continuing with Web App only...")
+    else:
+        print("--- Telegram Bot token not configured, skipping bot ---")
+        print("Web App will run standalone")
 
     try:
-        # Keep the main process alive until one of them dies
+        # Keep the main process alive
+        # If bot fails, continue with web app only
         while True:
             if web_proc.poll() is not None:
                 print("Web App process died. Exiting...")
                 break
-            if bot_proc.poll() is not None:
-                print("Telegram Bot process died. Exiting...")
-                break
+            
+            # Check bot status but don't exit if it dies
+            if bot_proc and bot_proc.poll() is not None:
+                print("Telegram Bot process died. Continuing with Web App only...")
+                bot_proc = None  # Clear reference
+                
             time.sleep(5)
     except KeyboardInterrupt:
         print("Stopping processes...")
     finally:
         web_proc.terminate()
-        bot_proc.terminate()
+        if bot_proc:
+            bot_proc.terminate()
 
 if __name__ == "__main__":
     run()
