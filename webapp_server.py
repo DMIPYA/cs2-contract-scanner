@@ -472,12 +472,6 @@ async def api_contract_detail(
     return _serialize_contract_detail(idx, c)
 
 
-@app.get('/health')
-async def health_check() -> dict:
-    """Simple health check for Hugging Face / Render"""
-    return {'status': 'ok', 'service': 'crafty-webapp'}
-
-
 @app.get('/api/status')
 async def api_status() -> dict:
     try:

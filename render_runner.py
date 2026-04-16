@@ -1,42 +1,47 @@
 import os
 import subprocess
-import threading
-import sys
 import time
-
-def run_bot():
-    """Run Telegram bot in background thread, ignore failures"""
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    if not token or len(token) < 10:
-        print("--- Telegram Bot token not configured, skipping ---")
-        return
-    
-    print("--- Launching Telegram Bot (background) ---")
-    while True:
-        try:
-            proc = subprocess.Popen([sys.executable, "telegram_bot.py"])
-            proc.wait()
-            print("Telegram Bot exited, restarting in 30s...")
-        except Exception as e:
-            print(f"Telegram Bot error: {e}")
-        time.sleep(30)
+import sys
 
 def run():
     print("Starting Main Process (Bot + WebApp)...")
     
-    port = os.environ.get("PORT", "7860")
+    # Render provides PORT variable
+    port = os.environ.get("PORT", "10000")
     print(f"Server will listen on PORT: {port}")
 
+    # Set webapp host/port via env for webapp_server.py
     os.environ["WEBAPP_PORT"] = port
     os.environ["WEBAPP_HOST"] = "0.0.0.0"
 
-    # Start bot in background thread (non-blocking)
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-
-    # Run webapp directly in main process so Hugging Face sees the port
     print("--- Launching Web App (FastAPI) ---")
-    os.execv(sys.executable, [sys.executable, "webapp_server.py"])
+    # Using uvicorn directly if webapp_server has an 'app' object
+    # Or just run the script if it starts uvicorn internally
+    # Let's run webapp_server.py and telegram_bot.py as subprocesses
+    
+    web_proc = subprocess.Popen([sys.executable, "webapp_server.py"])
+    
+    # Wait a bit for the web server to bind to the port
+    time.sleep(5)
+    
+    print("--- Launching Telegram Bot ---")
+    bot_proc = subprocess.Popen([sys.executable, "telegram_bot.py"])
+
+    try:
+        # Keep the main process alive until one of them dies
+        while True:
+            if web_proc.poll() is not None:
+                print("Web App process died. Exiting...")
+                break
+            if bot_proc.poll() is not None:
+                print("Telegram Bot process died. Exiting...")
+                break
+            time.sleep(5)
+    except KeyboardInterrupt:
+        print("Stopping processes...")
+    finally:
+        web_proc.terminate()
+        bot_proc.terminate()
 
 if __name__ == "__main__":
     run()
