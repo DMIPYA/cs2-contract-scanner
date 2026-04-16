@@ -102,7 +102,7 @@ class ContractCalculator:
 
         self._multisource_net_pricing = False
 
-        self._output_multiplier_threshold = 2.5
+        self._output_multiplier_threshold = 1.5
         self._filler_to_target_price_ratio = 0.75
 
         self._max_risk_ratio = 10.0
@@ -3569,14 +3569,6 @@ class ContractCalculator:
 
                 contract_skins = main_skins + fillers[:filler_count]
 
-                if self._is_golden_filler_present(
-                    fillers[:filler_count],
-                    input_rarity=input_rarity,
-                    is_stattrak=is_stattrak,
-                    target_collection=target_collection,
-                ):
-                    continue
-
                 ceiling = float(t.get('max_output_price') or 0.0)
                 if ceiling > 0.0:
                     if any(float(s.get('price') or 0.0) > ceiling for s in contract_skins):
@@ -3603,7 +3595,8 @@ class ContractCalculator:
                 risk_metrics = self._compute_risk_metrics(contract_skins, is_stattrak=is_stattrak)
                 risk_ratio = float(risk_metrics.get('risk_ratio') or 0.0)
                 worst_case_loss_pct = float(risk_metrics.get('worst_case_loss_pct') or 0.0)
-                if worst_case_loss_pct > float(self._max_worst_case_loss_pct):
+                _outcomes_count = self._get_next_grade_skins_count(target_collection, input_rarity, is_stattrak=is_stattrak)
+                if _outcomes_count > 1 and worst_case_loss_pct > float(self._max_worst_case_loss_pct):
                     continue
                 if risk_ratio > float(self._max_risk_ratio):
                     roi = float(contract_data.get('roi') or 0.0)
@@ -3879,7 +3872,7 @@ class ContractCalculator:
                 )
                 best_out_fn_price = float(best_out_fn_price) if best_out_fn_price else 0.0
                 gap_price = best_out_fn_price if best_out_fn_price > 0.0 else float(best_out_price)
-                if float(min_core_price) > 0.0 and (gap_price / float(min_core_price)) < 3.0:
+                if float(min_core_price) > 0.0 and (gap_price / float(min_core_price)) < 1.5:
                     skipped_gap_fail += 1
                     _push_diag_sample({
                         'reason': 'gap_fail',
@@ -4065,21 +4058,6 @@ class ContractCalculator:
 
                     contract_skins = core_skins[:core_count] + picked_fillers[:filler_count]
 
-                    if self._is_golden_filler_present(
-                        picked_fillers[:filler_count],
-                        input_rarity=input_rarity,
-                        is_stattrak=is_stattrak,
-                        target_collection=target_c,
-                    ):
-                        skipped_golden_filler += 1
-                        _push_diag_sample({
-                            'reason': 'golden_filler',
-                            'target_collection': target_c,
-                            'input_rarity': input_rarity,
-                            'filler_collection': used_collections[0] if used_collections else None,
-                        })
-                        continue
-
                     if best_out_price and float(best_out_price) > 0.0:
                         if any(float(s.get('price') or 0.0) > float(best_out_price) for s in contract_skins):
                             skipped_best_out_ceiling += 1
@@ -4146,7 +4124,8 @@ class ContractCalculator:
                 risk_metrics = self._compute_risk_metrics(contract_skins, is_stattrak=is_stattrak)
                 risk_ratio = float(risk_metrics.get('risk_ratio') or 0.0)
                 worst_case_loss_pct = float(risk_metrics.get('worst_case_loss_pct') or 0.0)
-                if worst_case_loss_pct > float(self._max_worst_case_loss_pct):
+                _outcomes_count = self._get_next_grade_skins_count(target_c, input_rarity, is_stattrak=is_stattrak)
+                if _outcomes_count > 1 and worst_case_loss_pct > float(self._max_worst_case_loss_pct):
                     continue
                 if risk_ratio > float(self._max_risk_ratio):
                     roi = float(contract_data.get('roi') or 0.0)
