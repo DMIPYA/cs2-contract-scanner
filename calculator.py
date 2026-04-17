@@ -2235,10 +2235,86 @@ class ContractCalculator:
                 out.append(dict(s))
         return out if changed else None
 
+    def _fetch_price_curve(self, skin_name: str, *, is_stattrak: bool, skin_min_f: float, skin_max_f: float) -> List[tuple]:
+        """
+        Fetches price curve for a skin: list of (price, norm_float) sorted by norm_float ascending.
+        Uses CSFloat for real float data, falls back to market cache (approximate).
+        Results are stored in session dedup cache.
+        """
+        if not hasattr(self, '_float_opt_session_cache'):
+            self._float_opt_session_cache: Dict[tuple, object] = {}
+
+        curve_key = ('curve', skin_name, bool(is_stattrak))
+        if curve_key in self._float_opt_session_cache:
+            return self._float_opt_session_cache[curve_key]  # type: ignore
+
+        pm = self.price_manager
+        curve: List[tuple] = []  # (price, norm_float)
+
+        # Try CSFloat first — real float per lot
+        csfloat = getattr(pm, 'csfloat_client', None)
+        if csfloat and bool(getattr(csfloat, 'enabled', False)) and not getattr(csfloat, '_session_disabled', True):
+            try:
+                lots = csfloat.get_listings(
+                    skin_name,
+                    target_wear=None,
+                    max_float=None,
+                    exclude_stattrak=not bool(is_stattrak),
+                    require_stattrak=bool(is_stattrak),
+                    limit=30,
+                )
+                denom = skin_max_f - skin_min_f
+                for price, fval, _ in lots:
+                    if fval is None or denom <= 1e-9:
+                        continue
+                    norm = max(0.0, min(1.0, (float(fval) - skin_min_f) / denom))
+                    curve.append((float(price), norm))
+            except Exception:
+                curve = []
+
+        # Fallback: market cache — approximate (mid-wear float)
+        if not curve and hasattr(pm, 'market_client'):
+            try:
+                lots = pm.market_client.get_listings(
+                    skin_name,
+                    target_wear=None,
+                    max_float=None,
+                    exclude_stattrak=not bool(is_stattrak),
+                    require_stattrak=bool(is_stattrak),
+                    allow_refresh=False,
+                    limit=30,
+                )
+                denom = skin_max_f - skin_min_f
+                for price, fval, _ in lots:
+                    if fval is None or denom <= 1e-9:
+                        continue
+                    norm = max(0.0, min(1.0, (float(fval) - skin_min_f) / denom))
+                    curve.append((float(price), norm))
+            except Exception:
+                curve = []
+
+        # Sort by norm_float ascending (cheapest float first = most "dirty")
+        curve.sort(key=lambda x: x[1])
+        self._float_opt_session_cache[curve_key] = curve
+        return curve
+
+    def _cheapest_lot_at_max_norm(self, curve: List[tuple], max_norm: float) -> Optional[tuple]:
+        """Returns cheapest (price, norm_float) from curve where norm_float <= max_norm."""
+        candidates = [(p, n) for p, n in curve if n <= max_norm + 1e-6]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda x: x[0])
+
     def _optimize_contract_floats(self, contract_skins: List[Dict], *, target_wear: str, is_stattrak: bool) -> Optional[List[Dict]]:
         """
-        Optimizes the contract by finding the cheapest skins that keep the output float 
-        at the edge of the target quality (e.g., ~0.0699 for Factory New).
+        Optimizes float distribution across contract slots.
+
+        Strategy: greedy slot redistribution.
+        - Compute float budget = target_avg_norm * 10
+        - For each slot, fetch price curve (price vs norm_float)
+        - Greedily assign: give "dirty" (high norm) float to cheap slots,
+          "clean" (low norm) float to expensive slots
+        - Result: same quality guarantee, lower total cost
         """
         if not contract_skins or len(contract_skins) != 10:
             return None
@@ -2250,122 +2326,170 @@ class ContractCalculator:
             'Well-Worn': 0.45,
             'Battle-Scarred': 1.0,
         }
-        
+
         target_max_avg_norm = float(wear_thresholds.get(target_wear, 0.07))
-        # Safety margin: aim for 99.8% of the threshold to avoid rounding issues
-        safe_target_avg_norm = target_max_avg_norm * 0.998
-        
+
         current_skins = [dict(s) for s in contract_skins]
-        
-        # Calculate current total weighted normalized float
-        # out_float = avg_norm * (max_f - min_f) + min_f
-        # We need to solve for avg_norm such that out_float <= threshold for ALL possible outcomes.
-        # But wait, the system uses average_normalized_float (avg_norm) across all inputs.
-        # Each output has its own [min_f, max_f].
-        
+
         outcomes = self.calculate_contract_outcomes_details(current_skins, is_stattrak=is_stattrak)
         if not outcomes:
             return None
 
-        # Determine the bottleneck: which outcome hits the threshold first?
-        # out_float_i = avg_norm * (max_i - min_i) + min_i
-        # avg_norm = (out_float_i - min_i) / (max_i - min_i)
-        
+        # Find bottleneck outcome — the one that constrains avg_norm the most
         limit_avg_norm = 1.0
         for o in outcomes:
             min_f = float(o.get('min_float', 0.0))
             max_f = float(o.get('max_float', 1.0))
             denom = max_f - min_f
             if denom > 1e-9:
-                # Max allowed avg_norm for this specific outcome to stay within target_wear
-                # (threshold - min_f) / (max_f - min_f)
                 max_norm_for_this = (target_max_avg_norm - min_f) / denom
                 if max_norm_for_this < limit_avg_norm:
                     limit_avg_norm = max_norm_for_this
 
-        # Apply safety margin to the bottleneck avg_norm
+        # Safety margin
         target_avg_norm = max(0.0, limit_avg_norm * 0.998)
-        
-        # Store the target max avg float in the contract dict for UI
+
+        # Store for UI
         for s in current_skins:
             s['target_max_avg_float'] = round(target_avg_norm, 6)
-        
-        # We want sum(norm_floats) / 10 <= target_avg_norm
-        target_total_norm = target_avg_norm * 10.0
-        
-        # Sort skins by price (descending) or by how much we can "worsen" them?
-        # Let's try to worsen the most expensive skins first to get the most profit.
-        indexed_skins = list(enumerate(current_skins))
-        
-        changed = False
-        
-        # We will iterate and try to replace each skin with a cheaper one that has a higher float,
-        # but keep the total normalized float below target_total_norm.
-        
-        for i, skin in indexed_skins:
-            nm = str(skin.get('name', ''))
+
+        float_budget = target_avg_norm * 10.0  # total norm budget across all 10 slots
+
+        # ── Build per-slot data ──────────────────────────────────────────────
+        slots = []
+        for s in current_skins:
+            nm = str(s.get('name', ''))
             skin_data = self.database.get_skin_by_name(nm)
             if not skin_data:
+                slots.append(None)
                 continue
-            
             try:
                 min_f = float(skin_data.min_float)
                 max_f = float(skin_data.max_float)
             except Exception:
+                slots.append(None)
                 continue
-                
             if max_f <= min_f + 1e-9:
+                slots.append(None)
                 continue
 
-            # Current normalized float of this skin
-            curr_f = float(skin.get('float', 0.0))
-            curr_norm = (curr_f - min_f) / (max_f - min_f)
-            
-            # Other skins total norm
-            other_total_norm = sum((float(s.get('float', 0.0)) - float(self.database.get_skin_by_name(s['name']).min_float)) / 
-                                   (float(self.database.get_skin_by_name(s['name']).max_float) - float(self.database.get_skin_by_name(s['name']).min_float))
-                                   for j, s in enumerate(current_skins) if i != j)
-            
-            # Max allowed norm for THIS skin
-            max_norm_allowed = target_total_norm - other_total_norm
-            if max_norm_allowed > 1.0:
-                max_norm_allowed = 1.0
-            
-            if max_norm_allowed <= curr_norm + 1e-4:
-                # Already at the limit or no room to worsen
+            curve = self._fetch_price_curve(nm, is_stattrak=is_stattrak, skin_min_f=min_f, skin_max_f=max_f)
+            curr_f = float(s.get('float', 0.0))
+            curr_norm = max(0.0, min(1.0, (curr_f - min_f) / (max_f - min_f)))
+
+            slots.append({
+                'skin': s,
+                'name': nm,
+                'min_f': min_f,
+                'max_f': max_f,
+                'curr_norm': curr_norm,
+                'curr_price': float(s.get('price', 0.0)),
+                'curve': curve,
+            })
+
+        # ── Greedy redistribution ────────────────────────────────────────────
+        # Phase 1: assign minimum norm to each slot (cheapest available lot)
+        # Phase 2: distribute remaining budget to slots where it saves money
+
+        valid_indices = [i for i, sl in enumerate(slots) if sl is not None]
+        if not valid_indices:
+            return None
+
+        # Start: assign norm=0 (cleanest) to all valid slots as baseline
+        assigned_norm = [0.0] * 10
+        for i in valid_indices:
+            sl = slots[i]
+            # Minimum norm available on market for this skin
+            if sl['curve']:
+                assigned_norm[i] = sl['curve'][0][1]  # lowest norm in curve
+            else:
+                assigned_norm[i] = sl['curr_norm']
+
+        remaining_budget = float_budget - sum(assigned_norm[i] for i in valid_indices)
+
+        # Phase 2: greedily give budget to slots where raising norm saves most money
+        # For each slot, compute marginal savings: price(curr_norm) - price(max_norm)
+        # Prioritize slots with highest savings per norm unit used
+
+        MAX_ITERATIONS = 50
+        for _ in range(MAX_ITERATIONS):
+            if remaining_budget < 1e-4:
+                break
+
+            best_gain = 0.01  # minimum gain threshold ($0.01)
+            best_slot = None
+            best_new_norm = None
+            best_new_price = None
+
+            for i in valid_indices:
+                sl = slots[i]
+                if not sl['curve']:
+                    continue
+
+                curr_assigned = assigned_norm[i]
+                # Max norm this slot can take without exceeding budget
+                max_norm_for_slot = min(1.0, curr_assigned + remaining_budget)
+
+                # Find cheapest lot at max allowed norm
+                best_lot = self._cheapest_lot_at_max_norm(sl['curve'], max_norm_for_slot)
+                if best_lot is None:
+                    continue
+
+                new_price, new_norm = best_lot
+                # Current price at current assigned norm
+                curr_lot = self._cheapest_lot_at_max_norm(sl['curve'], curr_assigned)
+                curr_price_at_norm = curr_lot[0] if curr_lot else sl['curr_price']
+
+                gain = curr_price_at_norm - new_price
+                if gain > best_gain:
+                    best_gain = gain
+                    best_slot = i
+                    best_new_norm = new_norm
+                    best_new_price = new_price
+
+            if best_slot is None:
+                break
+
+            # Apply: raise norm for best_slot, consume budget
+            norm_delta = best_new_norm - assigned_norm[best_slot]
+            assigned_norm[best_slot] = best_new_norm
+            remaining_budget -= norm_delta
+
+        # ── Apply results ────────────────────────────────────────────────────
+        changed = False
+        for i in valid_indices:
+            sl = slots[i]
+            target_norm = assigned_norm[i]
+
+            # Find actual lot to buy at this norm
+            best_lot = self._cheapest_lot_at_max_norm(sl['curve'], target_norm)
+            if best_lot is None:
                 continue
-                
-            # Convert back to actual float
-            max_actual_float = max_norm_allowed * (max_f - min_f) + min_f
-            
-            # Find the best (cheapest) skin on the market with float <= max_actual_float
-            # and hopefully float > curr_f
-            try:
-                pm = self.price_manager
-                if hasattr(pm, 'get_best_buy_with_float'):
-                    # We look for a skin that is potentially cheaper than current
-                    # but has a higher float (up to max_actual_float)
-                    best = pm.get_best_buy_with_float(
-                        nm,
-                        target_wear=None, # Any wear that fits the float
-                        max_float=max_actual_float,
-                        exclude_stattrak=not bool(is_stattrak),
-                        require_stattrak=bool(is_stattrak),
-                    )
-                    
-                    if best:
-                        new_price, new_flt, new_wear, src = best
-                        if float(new_price) < float(skin.get('price', 0.0)) - 0.01:
-                            # Found a cheaper one!
-                            current_skins[i].update({
-                                'price': float(new_price),
-                                'float': float(new_flt),
-                                'wear': str(new_wear),
-                                'buy_source': str(src)
-                            })
-                            changed = True
-            except Exception:
-                continue
+
+            new_price, new_norm = best_lot
+            # Convert norm back to real float
+            new_float = new_norm * (sl['max_f'] - sl['min_f']) + sl['min_f']
+
+            old_price = sl['curr_price']
+            if new_price < old_price - 0.01:
+                # Determine wear from float
+                if new_float < 0.07:
+                    new_wear = 'Factory New'
+                elif new_float < 0.15:
+                    new_wear = 'Minimal Wear'
+                elif new_float < 0.38:
+                    new_wear = 'Field-Tested'
+                elif new_float < 0.45:
+                    new_wear = 'Well-Worn'
+                else:
+                    new_wear = 'Battle-Scarred'
+
+                current_skins[i].update({
+                    'price': new_price,
+                    'float': round(new_float, 6),
+                    'wear': new_wear,
+                })
+                changed = True
 
         return current_skins if changed else None
 
