@@ -1879,27 +1879,6 @@ class ContractCalculator:
         k = min(int(refine_topk), len(results))
         refine_slice = list(results[:k])
 
-        # Enable CSFloat only for refine — but ONLY if it's actually usable
-        # (has an API key and is not in a rate-limit cooldown). Forcefully enabling
-        # a rate-limited CSFloat client causes the refine step to block for 60–120 s.
-        csfloat_prev_enabled = None
-        try:
-            cfc = getattr(self.price_manager, 'csfloat_client', None)
-            if cfc is not None:
-                csfloat_prev_enabled = bool(getattr(cfc, 'enabled', False))
-                has_key = bool(str(getattr(cfc, 'api_key', '') or '').strip())
-                is_rate_limited = False
-                try:
-                    rl_until = float(getattr(cfc, '_rate_limit_until_ts', 0.0) or 0.0)
-                    is_rate_limited = rl_until > time.time()
-                except Exception:
-                    pass
-                if has_key and not is_rate_limited:
-                    setattr(cfc, 'enabled', True)
-                # else: leave CSFloat disabled — refine will use market.csgo.com prices only
-        except Exception:
-            csfloat_prev_enabled = None
-
         refined: List[Dict] = []
         self._multisource_net_pricing = True
 
@@ -2063,13 +2042,6 @@ class ContractCalculator:
             self._multisource_net_pricing = False
             try:
                 self.clear_price_memoization()
-            except Exception:
-                pass
-            try:
-                if csfloat_prev_enabled is not None:
-                    cfc = getattr(self.price_manager, 'csfloat_client', None)
-                    if cfc is not None:
-                        setattr(cfc, 'enabled', bool(csfloat_prev_enabled))
             except Exception:
                 pass
 
@@ -5209,6 +5181,7 @@ class ContractCalculator:
             'best_outcome_name': best_outcome_name,
             'best_outcome_price': float(best_outcome_price) if best_outcome_price else 0.0,
             'best_outcome_probability': float(best_outcome_probability) if best_outcome_probability else 0.0,
+            'outcomes': outcomes,
         }
     
     def _get_possible_outputs(self, collection: str, input_rarity: str, target_wear: str, is_stattrak: bool) -> List[Dict]:

@@ -457,17 +457,17 @@ async def api_contract_detail(
 
     # Ensure outcomes are computed (they may not be ready for items beyond warmup_n)
     if not c.get('outcomes'):
-        calc = getattr(svc, 'calculator', None)
-        if calc is not None:
-            try:
+        try:
+            calc = getattr(svc, 'calculator', None)
+            if calc is not None:
                 ins = list(c.get('input_skins') or [])
                 is_st = bool(c.get('is_stattrak'))
                 if ins:
                     outs = calc.calculate_contract_outcomes_details(ins, is_stattrak=is_st)
                     outs = sorted(outs or [], key=lambda x: float(x.get('price') or 0.0), reverse=True)
                     c['outcomes'] = outs
-            except Exception:
-                logger.debug('Failed to compute outcomes for idx=%d', idx, exc_info=True)
+        except Exception:
+            logger.debug('Failed to compute outcomes for idx=%d', idx, exc_info=True)
 
     return _serialize_contract_detail(idx, c)
 
