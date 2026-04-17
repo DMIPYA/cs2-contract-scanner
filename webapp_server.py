@@ -237,14 +237,18 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                     if denorm_floats:
                         max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
     
-    # Group inputs by (name, wear, collection)
+    # Group inputs by (name, wear, float_rounded, collection)
+    # Float rounded to 4 decimal places — skins with different floats shown separately
     from collections import OrderedDict
     groups: OrderedDict = OrderedDict()
     for s in ins:
         nm = str(s.get('name') or '')
         wr = str(s.get('wear') or '')
         coll = str(s.get('collection') or '')
-        key = (nm, wr, coll)
+        fl = s.get('float')
+        fl_val = float(fl) if fl is not None else None
+        fl_rounded = round(fl_val, 4) if fl_val is not None else None
+        key = (nm, wr, fl_rounded, coll)
         g = groups.get(key)
         if g is None:
             g = {
@@ -266,8 +270,6 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         except Exception:
             pass
         
-        fl = s.get('float')
-        fl_val = float(fl) if fl is not None else None
         if fl_val is not None:
             g['floats'].append(fl_val)
             

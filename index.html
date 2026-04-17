@@ -627,6 +627,7 @@ body {
           <div class="route-block" style="flex:1;min-width:0">
             <div class="route-coll">Output target</div>
             <div class="route-name" id="d-route-output"></div>
+            <div class="route-coll" id="d-route-wear" style="margin-top:3px;color:var(--orange);letter-spacing:1px;"></div>
           </div>
         </div>
       </div>
@@ -638,6 +639,7 @@ body {
           <div class="d-title" id="d-inputs-title">Input Skins</div>
         </div>
         <div id="d-inputs-list"></div>
+        <div id="d-max-float-hint" style="display:none;margin-top:8px;font-size:10px;color:var(--text3);letter-spacing:.5px;padding:5px 0;border-top:1px solid var(--surface2);"></div>
       </div>
 
       <!-- Outcomes -->
@@ -1082,6 +1084,13 @@ function renderDetailFull(c) {
   document.getElementById('d-route-coll').textContent = c.collection || '';
   document.getElementById('d-route-input').textContent = (c.rarity || 'Mil-Spec') + ' inputs';
   document.getElementById('d-route-output').textContent = c.name || '';
+  const wearEl = document.getElementById('d-route-wear');
+  if (c.target_wear) {
+    wearEl.textContent = c.target_wear.toUpperCase();
+    wearEl.style.display = '';
+  } else {
+    wearEl.style.display = 'none';
+  }
 
   // Group inputs by (name, wear, collection)
   const inputsList = document.getElementById('d-inputs-list');
@@ -1093,30 +1102,34 @@ function renderDetailFull(c) {
   } else {
     inputsList.innerHTML = groups.map((g, gIdx) => {
       const rangeLabel = g.start === g.end ? `${String(g.start).padStart(2,'0')}` : `${String(g.start).padStart(2,'0')}–${String(g.end).padStart(2,'0')}`;
-      const perItemTxt = g.count > 1 ? ` · $${fmt$(g.per_item)} ea` : '';
-      // Show max allowed wear and float
-      let qualityInfo = '';
-      if (maxAllowedWear && maxAllowedFloat != null) {
-        qualityInfo = `max ${maxAllowedWear} (${maxAllowedFloat.toFixed(4)})`;
-      } else if (maxAllowedFloat != null) {
-        qualityInfo = `max float ${maxAllowedFloat.toFixed(4)}`;
-      }
+      const perItemTxt = g.count > 1 ? `$${fmt$(g.per_item)} ea` : '';
+      // Show actual wear + float of this group (after optimization)
+      const wearLine = g.avg_float != null
+        ? `${escHtml(g.wear)} · ${g.avg_float.toFixed(4)}`
+        : escHtml(g.wear);
       return `
 <div class="input-item" data-gidx="${gIdx}">
   <div class="input-idx">${rangeLabel}</div>
   <div class="input-info">
     <div class="input-name">${escHtml(g.name)}</div>
-    <div class="input-wear">${escHtml(g.wear)} (×${g.count}) · ${escHtml(g.collection)}</div>
+    <div class="input-wear">${wearLine}</div>
   </div>
   <div class="input-right">
     <div class="input-price">$${fmt$(g.total_price)}</div>
-    <div class="input-float">${escHtml(qualityInfo)}${perItemTxt}</div>
+    ${perItemTxt ? `<div class="input-float">${perItemTxt}</div>` : ''}
   </div>
 </div>`;
     }).join('');
   }
 
-
+  // Max allowed float hint
+  const hintEl = document.getElementById('d-max-float-hint');
+  if (maxAllowedFloat != null && maxAllowedWear) {
+    hintEl.textContent = `max buy: ${maxAllowedWear} · ${maxAllowedFloat.toFixed(4)} avg float`;
+    hintEl.style.display = '';
+  } else {
+    hintEl.style.display = 'none';
+  }
 
   // Outcomes
   const outcomesList = document.getElementById('d-outcomes-list');

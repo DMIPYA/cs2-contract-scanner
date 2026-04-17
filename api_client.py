@@ -2034,21 +2034,8 @@ class PriceManager:
         allow_refresh: bool = True,
         limit: int = 50,
     ) -> List[Tuple[float, Optional[float], str]]:
-        if self.csfloat_client and bool(getattr(self.csfloat_client, 'enabled', False)):
-            try:
-                lots = self.csfloat_client.get_listings(
-                    skin_name,
-                    target_wear=target_wear,
-                    max_float=max_float,
-                    exclude_stattrak=exclude_stattrak,
-                    require_stattrak=require_stattrak,
-                    limit=limit,
-                )
-                if lots:
-                    return list(lots)
-            except Exception:
-                pass
-
+        # CSFloat intentionally excluded here — used only in explicit float optimization
+        # (_fetch_price_curve) and sell price calculation (_calculate_contract_profit).
         return self.market_client.get_listings(
             skin_name,
             target_wear=target_wear,
@@ -2070,26 +2057,9 @@ class PriceManager:
         require_stattrak: bool = False,
         limit: int = 50,
     ) -> Optional[Tuple[float, Optional[float], str, str]]:
-        best = None
-        
-        if self.csfloat_client and bool(getattr(self.csfloat_client, 'enabled', False)):
-            try:
-                lots = self.csfloat_client.get_listings(
-                    skin_name,
-                    target_wear=target_wear,
-                    max_float=max_float,
-                    exclude_stattrak=exclude_stattrak,
-                    require_stattrak=require_stattrak,
-                    limit=limit,
-                )
-                if lots:
-                    p, f, w = lots[0]
-                    best = (float(p), f, str(w or ''), 'CSFLOAT')
-            except Exception:
-                pass
-
+        # CSFloat intentionally excluded here — market cache only for bulk operations.
         try:
-            lots2 = self.market_client.get_listings(
+            lots = self.market_client.get_listings(
                 skin_name,
                 target_wear=target_wear,
                 max_float=max_float,
@@ -2099,15 +2069,12 @@ class PriceManager:
                 allow_refresh=True,
                 limit=limit,
             )
-            if lots2:
-                p2, f2, w2 = lots2[0]
-                cand = (float(p2), f2, str(w2 or ''), 'MARKETCSGO')
-                if (best is None) or float(cand[0]) + 1e-12 < float(best[0]):
-                    best = cand
+            if lots:
+                p, f, w = lots[0]
+                return (float(p), f, str(w or ''), 'MARKETCSGO')
         except Exception:
             pass
-
-        return best
+        return None
 
     def get_liquidity_metrics(
         self,

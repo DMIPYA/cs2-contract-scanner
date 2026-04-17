@@ -2005,6 +2005,14 @@ class ContractCalculator:
                         contract_skins = refined_inputs
 
                     # ── Float optimization (pushing to the edge of quality) ──────────
+                    # Calculate outcomes BEFORE float optimization — they must reflect
+                    # the original float values, not the optimized (cheaper) ones.
+                    try:
+                        pre_opt_outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_st)
+                        pre_opt_outcomes = sorted(pre_opt_outcomes or [], key=lambda x: float(x.get('price') or 0.0), reverse=True)
+                    except Exception:
+                        pre_opt_outcomes = None
+
                     try:
                         optimize_floats = str(os.getenv('HUNT_OPTIMIZE_FLOATS', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
                         if optimize_floats:
@@ -2033,6 +2041,10 @@ class ContractCalculator:
                     out = dict(r)
                     out['input_skins'] = contract_skins
                     out.update(cd)
+                    # Override outcomes with pre-optimization values — float optimization
+                    # changes input floats to cheaper lots but must not affect output quality
+                    if pre_opt_outcomes:
+                        out['outcomes'] = pre_opt_outcomes
                     if liquidity_depth is not None:
                         out['liquidity_depth'] = int(liquidity_depth)
                     refined.append(out)
@@ -2210,7 +2222,8 @@ class ContractCalculator:
     def _fetch_price_curve(self, skin_name: str, *, is_stattrak: bool, skin_min_f: float, skin_max_f: float) -> List[tuple]:
         """
         Fetches price curve for a skin: list of (price, norm_float) sorted by norm_float ascending.
-        Uses CSFloat for real float data, falls back to market cache (approximate).
+        Uses CSFloat ONLY — market cache floats are approximate (mid-wear) and cause wrong results.
+        Returns empty list if CSFloat is unavailable.
         Results are stored in session dedup cache.
         """
         if not hasattr(self, '_float_opt_session_cache'):
@@ -2223,7 +2236,7 @@ class ContractCalculator:
         pm = self.price_manager
         curve: List[tuple] = []  # (price, norm_float)
 
-        # Try CSFloat first — real float per lot
+        # CSFloat only — market cache has approximate floats (mid-wear) which break optimization
         csfloat = getattr(pm, 'csfloat_client', None)
         if csfloat and bool(getattr(csfloat, 'enabled', False)) and not getattr(csfloat, '_session_disabled', True):
             try:
@@ -2244,28 +2257,7 @@ class ContractCalculator:
             except Exception:
                 curve = []
 
-        # Fallback: market cache — approximate (mid-wear float)
-        if not curve and hasattr(pm, 'market_client'):
-            try:
-                lots = pm.market_client.get_listings(
-                    skin_name,
-                    target_wear=None,
-                    max_float=None,
-                    exclude_stattrak=not bool(is_stattrak),
-                    require_stattrak=bool(is_stattrak),
-                    allow_refresh=False,
-                    limit=30,
-                )
-                denom = skin_max_f - skin_min_f
-                for price, fval, _ in lots:
-                    if fval is None or denom <= 1e-9:
-                        continue
-                    norm = max(0.0, min(1.0, (float(fval) - skin_min_f) / denom))
-                    curve.append((float(price), norm))
-            except Exception:
-                curve = []
-
-        # Sort by norm_float ascending (cheapest float first = most "dirty")
+        # Sort by norm_float ascending
         curve.sort(key=lambda x: x[1])
         self._float_opt_session_cache[curve_key] = curve
         return curve
@@ -2279,16 +2271,22 @@ class ContractCalculator:
 
     def _optimize_contract_floats(self, contract_skins: List[Dict], *, target_wear: str, is_stattrak: bool) -> Optional[List[Dict]]:
         """
-        Optimizes float distribution across contract slots.
-
-        Strategy: greedy slot redistribution.
-        - Compute float budget = target_avg_norm * 10
-        - For each slot, fetch price curve (price vs norm_float)
-        - Greedily assign: give "dirty" (high norm) float to cheap slots,
-          "clean" (low norm) float to expensive slots
-        - Result: same quality guarantee, lower total cost
+        Optimizes float distribution across contract slots using CSFloat data.
+        Requires CSFloat — skipped entirely if CSFloat is unavailable or disabled,
+        because market cache floats are approximate and produce wrong results.
         """
         if not contract_skins or len(contract_skins) != 10:
+            return None
+
+        # Only run if CSFloat is available with real float data
+        pm = self.price_manager
+        csfloat = getattr(pm, 'csfloat_client', None)
+        csfloat_ok = (
+            csfloat is not None
+            and bool(getattr(csfloat, 'enabled', False))
+            and not getattr(csfloat, '_session_disabled', True)
+        )
+        if not csfloat_ok:
             return None
 
         wear_thresholds = {
