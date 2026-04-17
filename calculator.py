@@ -1098,15 +1098,6 @@ class ContractCalculator:
         except Exception:
             require_craftable = True
 
-        broad_csfloat_prev_enabled = None
-        try:
-            cfc = getattr(self.price_manager, 'csfloat_client', None)
-            if cfc is not None:
-                broad_csfloat_prev_enabled = bool(getattr(cfc, 'enabled', False))
-                setattr(cfc, 'enabled', False)
-        except Exception:
-            broad_csfloat_prev_enabled = None
-
         for input_rarity in input_rarities:
             rarity_stats = {
                 'rarity': self._normalize_rarity(input_rarity),
@@ -1853,15 +1844,7 @@ class ContractCalculator:
 
         results = results[: int(max_results)]
 
-        try:
-            if broad_csfloat_prev_enabled is not None:
-                cfc = getattr(self.price_manager, 'csfloat_client', None)
-                if cfc is not None:
-                    setattr(cfc, 'enabled', bool(broad_csfloat_prev_enabled))
-        except Exception:
-            pass
-
-        # Two-pass refine (optional). Broad pass is calculated with CSFloat disabled in order to avoid 429.
+        # Two-pass refine (optional).
         try:
             refine_enable = str(os.getenv('HUNT_REFINE_ENABLE', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
         except Exception:
@@ -1948,6 +1931,19 @@ class ContractCalculator:
                         if _strictest_float > float(_liq_float_threshold) + 1e-9:
                             # Normal float — no liquidity concern, keep original price
                             continue
+
+                        # If CSFloat is unavailable, we can't verify real price for
+                        # low-float skins — market cache price is unreliable for these.
+                        # Skip the contract to avoid showing unrealistic profit.
+                        _cfc = getattr(self.price_manager, 'csfloat_client', None)
+                        _csfloat_available = (
+                            _cfc is not None
+                            and bool(getattr(_cfc, 'enabled', False))
+                            and not getattr(_cfc, '_session_disabled', True)
+                        )
+                        if not _csfloat_available:
+                            liquidity_ok = False
+                            break
 
                         try:
                             _listings = self.price_manager.get_listings(
@@ -5072,28 +5068,8 @@ class ContractCalculator:
                 if bool(self._multisource_net_pricing):
                     market_net = float(price) * (1.0 - float(self.market_fee))
                     best_net = float(market_net)
-
-                    csfloat_net = None
-                    try:
-                        cfc = getattr(self.price_manager, 'csfloat_client', None)
-                        if cfc is not None and bool(getattr(cfc, 'enabled', False)):
-                            cs_price = cfc.get_price(
-                                skin_name,
-                                target_wear=wear,
-                                max_float=float(out_float),
-                                exclude_stattrak=not is_stattrak,
-                                require_stattrak=bool(is_stattrak),
-                                limit=50,
-                            )
-                            if cs_price is not None and float(cs_price) > 0:
-                                csfloat_net = float(cs_price) * (1.0 - float(self.csfloat_fee))
-                    except Exception:
-                        csfloat_net = None
-
-                    if csfloat_net is not None and float(csfloat_net) > float(best_net) + 1e-12:
-                        best_net = float(csfloat_net)
-                        sell_source = 'CSFLOAT'
-                        sell_fee = float(self.csfloat_fee)
+                    sell_source = 'MARKETCSGO'
+                    sell_fee = float(self.market_fee)
 
                     price = float(best_net)
 
