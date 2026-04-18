@@ -2361,15 +2361,11 @@ class ContractCalculator:
         if not valid_indices:
             return None
 
-        # Start: assign norm=0 (cleanest) to all valid slots as baseline
+        # Start: assign current norm to all valid slots as baseline
         assigned_norm = [0.0] * 10
         for i in valid_indices:
             sl = slots[i]
-            # Minimum norm available on market for this skin
-            if sl['curve']:
-                assigned_norm[i] = sl['curve'][0][1]  # lowest norm in curve
-            else:
-                assigned_norm[i] = sl['curr_norm']
+            assigned_norm[i] = sl['curr_norm']
 
         remaining_budget = float_budget - sum(assigned_norm[i] for i in valid_indices)
 
@@ -2382,7 +2378,7 @@ class ContractCalculator:
             if remaining_budget < 1e-4:
                 break
 
-            best_gain = 0.01  # minimum gain threshold ($0.01)
+            best_gain = 0.0  # efficiency threshold: savings per norm unit
             best_slot = None
             best_new_norm = None
             best_new_price = None
@@ -2396,22 +2392,29 @@ class ContractCalculator:
                 # Max norm this slot can take without exceeding budget
                 max_norm_for_slot = min(1.0, curr_assigned + remaining_budget)
 
-                # Find cheapest lot at max allowed norm
-                best_lot = self._cheapest_lot_at_max_norm(sl['curve'], max_norm_for_slot)
-                if best_lot is None:
-                    continue
-
-                new_price, new_norm = best_lot
                 # Current price at current assigned norm
                 curr_lot = self._cheapest_lot_at_max_norm(sl['curve'], curr_assigned)
                 curr_price_at_norm = curr_lot[0] if curr_lot else sl['curr_price']
 
-                gain = curr_price_at_norm - new_price
-                if gain > best_gain:
-                    best_gain = gain
-                    best_slot = i
-                    best_new_norm = new_norm
-                    best_new_price = new_price
+                # Try ALL available lots within budget — pick best savings/norm ratio
+                for lot_price, lot_norm in sl['curve']:
+                    if lot_norm <= curr_assigned + 1e-6:
+                        continue  # not an improvement
+                    if lot_norm > max_norm_for_slot + 1e-6:
+                        continue  # exceeds budget
+                    norm_used = lot_norm - curr_assigned
+                    if norm_used < 1e-6:
+                        continue
+                    gain = curr_price_at_norm - lot_price
+                    if gain <= 0.01:
+                        continue
+                    # savings per norm unit — prefer efficient use of budget
+                    efficiency = gain / norm_used
+                    if efficiency > best_gain:
+                        best_gain = efficiency
+                        best_slot = i
+                        best_new_norm = lot_norm
+                        best_new_price = lot_price
 
             if best_slot is None:
                 break
@@ -2423,6 +2426,9 @@ class ContractCalculator:
 
         # ── Apply results ────────────────────────────────────────────────────
         changed = False
+        original_total = sum(slots[i]['curr_price'] for i in valid_indices)
+        new_total = 0.0
+
         for i in valid_indices:
             sl = slots[i]
             target_norm = assigned_norm[i]
@@ -2430,34 +2436,55 @@ class ContractCalculator:
             # Find actual lot to buy at this norm
             best_lot = self._cheapest_lot_at_max_norm(sl['curve'], target_norm)
             if best_lot is None:
+                new_total += sl['curr_price']
                 continue
 
             new_price, new_norm = best_lot
-            # Convert norm back to real float
+            new_total += new_price
+
+        # Only apply if total cost is lower
+        if new_total >= original_total - 0.01:
+            return None
+
+        for i in valid_indices:
+            sl = slots[i]
+            target_norm = assigned_norm[i]
+
+            best_lot = self._cheapest_lot_at_max_norm(sl['curve'], target_norm)
+            if best_lot is None:
+                continue
+
+            new_price, new_norm = best_lot
             new_float = new_norm * (sl['max_f'] - sl['min_f']) + sl['min_f']
 
-            old_price = sl['curr_price']
-            if new_price < old_price - 0.01:
-                # Determine wear from float
-                if new_float < 0.07:
-                    new_wear = 'Factory New'
-                elif new_float < 0.15:
-                    new_wear = 'Minimal Wear'
-                elif new_float < 0.38:
-                    new_wear = 'Field-Tested'
-                elif new_float < 0.45:
-                    new_wear = 'Well-Worn'
-                else:
-                    new_wear = 'Battle-Scarred'
+            if new_float < 0.07:
+                new_wear = 'Factory New'
+            elif new_float < 0.15:
+                new_wear = 'Minimal Wear'
+            elif new_float < 0.38:
+                new_wear = 'Field-Tested'
+            elif new_float < 0.45:
+                new_wear = 'Well-Worn'
+            else:
+                new_wear = 'Battle-Scarred'
 
-                current_skins[i].update({
-                    'price': new_price,
-                    'float': round(new_float, 6),
-                    'wear': new_wear,
-                })
-                changed = True
+            current_skins[i].update({
+                'price': new_price,
+                'float': round(new_float, 6),
+                'wear': new_wear,
+            })
+            changed = True
 
-        return current_skins if changed else None
+        if not changed:
+            return None
+
+        # Final validation: ensure avg_norm is still within target after optimization
+        final_avg_norm = self._calculate_average_normalized_float(current_skins)
+        if final_avg_norm > target_avg_norm + 1e-4:
+            # Optimization violated the float constraint — discard results
+            return None
+
+        return current_skins
 
     def find_target_hunting_optimized(
         self,
