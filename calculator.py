@@ -1996,19 +1996,19 @@ class ContractCalculator:
                         contract_skins = updated_skins
                     # ── End liquidity check ──────────────────────────────────────────
 
-                    refined_inputs = self._refine_contract_inputs(contract_skins, is_stattrak=is_st)
-                    if refined_inputs:
-                        contract_skins = refined_inputs
-
-                    # ── Float optimization (pushing to the edge of quality) ──────────
-                    # Calculate outcomes BEFORE float optimization — they must reflect
-                    # the original float values, not the optimized (cheaper) ones.
+                    # Calculate outcomes NOW — before any float/wear changes
+                    # so they reflect the original contract float values
                     try:
                         pre_opt_outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_st)
                         pre_opt_outcomes = sorted(pre_opt_outcomes or [], key=lambda x: float(x.get('price') or 0.0), reverse=True)
                     except Exception:
                         pre_opt_outcomes = None
 
+                    refined_inputs = self._refine_contract_inputs(contract_skins, is_stattrak=is_st)
+                    if refined_inputs:
+                        contract_skins = refined_inputs
+
+                    # ── Float optimization (pushing to the edge of quality) ──────────
                     try:
                         optimize_floats = str(os.getenv('HUNT_OPTIMIZE_FLOATS', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
                         if optimize_floats:
@@ -2344,10 +2344,13 @@ class ContractCalculator:
             for w, price in sl['wear_prices'].items():
                 mid_f = wear_mid_float[w]
                 norm = max(0.0, min(1.0, (mid_f - sl['min_f']) / sl['denom']))
-                max_f_wear = wear_thresholds[w]
-                # Clamp max_float to skin range
+                # Use slightly below boundary so float stays within wear quality
+                max_f_wear = wear_thresholds[w] - (0.0001 if w != 'Battle-Scarred' else 0.0)
+                # Clamp to skin range
                 max_f_wear = min(max_f_wear, sl['max_f'])
-                pts.append((price, norm, w, max_f_wear))
+                # norm for max_float (used for final validation)
+                max_norm = max(0.0, min(1.0, (max_f_wear - sl['min_f']) / sl['denom']))
+                pts.append((price, norm, w, max_f_wear, max_norm))
             pts.sort(key=lambda x: x[1])  # sort by norm ascending
             return pts
 
@@ -2378,7 +2381,7 @@ class ContractCalculator:
                     continue
                 curr_price = min(curr_pts, key=lambda x: x[0])[0]
 
-                for price, norm, wear, max_f_wear in curve:
+                for price, norm, wear, max_f_wear, max_norm in curve:
                     if norm <= curr_norm + 1e-6:
                         continue  # not dirtier
                     norm_delta = norm - curr_norm
@@ -2391,7 +2394,7 @@ class ContractCalculator:
                     if eff > best_eff:
                         best_eff = eff
                         best_slot = i
-                        best_pt = (price, norm, wear, max_f_wear)
+                        best_pt = (price, norm, wear, max_f_wear, max_norm)
 
             if best_slot is None:
                 break
@@ -2410,19 +2413,20 @@ class ContractCalculator:
             curve = slot_curve(sl)
 
             # Find cheapest wear at or below target_norm
-            candidates = [(p, n, w, mf) for p, n, w, mf in curve if n <= target_norm + 1e-6]
+            candidates = [(p, n, w, mf, mn) for p, n, w, mf, mn in curve if n <= target_norm + 1e-6]
             if not candidates:
                 result.append(dict(contract_skins[i]))
                 new_total += sl['curr_price']
                 continue
 
             best = min(candidates, key=lambda x: x[0])
-            price, norm, wear, max_float_for_wear = best
+            price, norm, wear, max_float_for_wear, max_norm_for_wear = best
             new_total += price
 
             s2 = dict(contract_skins[i])
             s2['wear'] = wear
             s2['price'] = price
+            # Use mid_float for avg_norm calculation (conservative estimate)
             s2['float'] = wear_mid_float[wear]
             s2['max_float_for_wear'] = max_float_for_wear
             result.append(s2)
@@ -2430,10 +2434,18 @@ class ContractCalculator:
         if new_total >= original_total - 0.01:
             return None  # No improvement
 
-        # Final validation
-        final_avg_norm = self._calculate_average_normalized_float(result)
+        # Final validation using max_float (worst case) — ensures quality is guaranteed
+        # even if buyer purchases at the maximum allowed float
+        validation_skins = []
+        for s in result:
+            s_val = dict(s)
+            if s_val.get('max_float_for_wear') is not None:
+                s_val['float'] = float(s_val['max_float_for_wear'])
+            validation_skins.append(s_val)
+
+        final_avg_norm = self._calculate_average_normalized_float(validation_skins)
         if final_avg_norm > target_avg_norm + 1e-4:
-            return None  # Violated constraint
+            return None  # Violated constraint even at max allowed float
 
         return result
 

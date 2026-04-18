@@ -279,6 +279,14 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
             'price': price,
         })
 
+    _WEAR_MAX_FLOAT = {
+        'Factory New':   0.0699,
+        'Minimal Wear':  0.1499,
+        'Field-Tested':  0.3799,
+        'Well-Worn':     0.4499,
+        'Battle-Scarred': 1.0,
+    }
+
     input_groups = []
     pos = 1
     for g in groups.values():
@@ -289,12 +297,12 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         if g['floats']:
             avg_float = round(sum(g['floats']) / len(g['floats']), 4)
         per_item = round(g['total_price'] / max(g['count'], 1), 2)
-        
-        # Determine max allowed float for this skin to keep quality
-        # This is a bit complex as it depends on other skins, 
-        # but we can show the theoretical max for this skin given the target_wear.
-        # However, the user asked for "max float (max allowed quality)" in contract details.
-        
+
+        # max_float_for_wear: from optimization if available, else wear boundary
+        mf = g.get('max_float_for_wear')
+        if mf is None:
+            mf = _WEAR_MAX_FLOAT.get(g['wear'])
+
         input_groups.append({
             'start': start_i,
             'end': end_i,
@@ -306,7 +314,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
             'total_price': round(g['total_price'], 2),
             'per_item': per_item,
             'avg_float': avg_float,
-            'max_float_for_wear': round(g['max_float_for_wear'], 4) if g.get('max_float_for_wear') else None,
+            'max_float_for_wear': round(mf, 4) if mf is not None else None,
             'individual_skins': g['individual_skins'],
         })
 
