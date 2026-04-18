@@ -639,7 +639,6 @@ body {
           <div class="d-title" id="d-inputs-title">Input Skins</div>
         </div>
         <div id="d-inputs-list"></div>
-        <div id="d-max-float-hint" style="display:none;margin-top:8px;font-size:10px;color:var(--text3);letter-spacing:.5px;padding:5px 0;border-top:1px solid var(--surface2);"></div>
       </div>
 
       <!-- Outcomes -->
@@ -1103,9 +1102,10 @@ function renderDetailFull(c) {
     inputsList.innerHTML = groups.map((g, gIdx) => {
       const rangeLabel = g.start === g.end ? `${String(g.start).padStart(2,'0')}` : `${String(g.start).padStart(2,'0')}–${String(g.end).padStart(2,'0')}`;
       const perItemTxt = g.count > 1 ? `$${fmt$(g.per_item)} ea` : '';
-      // Show actual wear + float of this group (after optimization)
-      const wearLine = g.avg_float != null
-        ? `${escHtml(g.wear)} · ${g.avg_float.toFixed(4)}`
+      // Show wear + max float hint per group
+      const maxF = g.max_float_for_wear;
+      const wearLine = maxF != null
+        ? `${escHtml(g.wear)} · max ${maxF.toFixed(4)}`
         : escHtml(g.wear);
       return `
 <div class="input-item" data-gidx="${gIdx}">
@@ -1120,15 +1120,6 @@ function renderDetailFull(c) {
   </div>
 </div>`;
     }).join('');
-  }
-
-  // Max allowed float hint
-  const hintEl = document.getElementById('d-max-float-hint');
-  if (maxAllowedFloat != null && maxAllowedWear) {
-    hintEl.textContent = `max buy: ${maxAllowedWear} · ${maxAllowedFloat.toFixed(4)} avg float`;
-    hintEl.style.display = '';
-  } else {
-    hintEl.style.display = 'none';
   }
 
   // Outcomes

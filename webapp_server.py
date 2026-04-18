@@ -259,6 +259,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                 'count': 0,
                 'total_price': 0.0,
                 'floats': [],
+                'max_float_for_wear': s.get('max_float_for_wear'),
                 'individual_skins': [],
             }
             groups[key] = g
@@ -305,6 +306,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
             'total_price': round(g['total_price'], 2),
             'per_item': per_item,
             'avg_float': avg_float,
+            'max_float_for_wear': round(g['max_float_for_wear'], 4) if g.get('max_float_for_wear') else None,
             'individual_skins': g['individual_skins'],
         })
 
