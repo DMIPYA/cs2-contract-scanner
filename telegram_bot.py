@@ -1270,14 +1270,25 @@ def main() -> None:
     class _ConsoleAllowlistFilter(logging.Filter):
         def filter(self, record: logging.LogRecord) -> bool:
             name = str(record.name or '')
-            # Keep terminal output minimal: only high-level bot/service status.
-            if (
-                name.startswith('telegram_bot')
-                or name.startswith('bot_service')
-                or name.startswith('telegram.ext')
-                or name == '__main__'
-            ):
+            msg = str(record.getMessage() or '')
+
+            # Always show errors and warnings from any module
+            if record.levelno >= logging.WARNING:
                 return True
+
+            # Bot/service startup and refresh status
+            if name.startswith('bot_service') or name == '__main__' or name.startswith('webapp_server'):
+                # Skip verbose per-item debug lines
+                noisy = ('HuntDebug', 'HuntProfile', 'HuntDebugEval', 'HuntDebugInputs',
+                         'RankTargets', 'SalesHistory', 'TargetHuntingService env')
+                if any(n in msg for n in noisy):
+                    return False
+                return True
+
+            # Telegram framework startup only
+            if name.startswith('telegram.ext'):
+                return 'Application started' in msg or 'Application stopped' in msg
+
             return False
 
     root = logging.getLogger()
