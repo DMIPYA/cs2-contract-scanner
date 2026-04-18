@@ -686,12 +686,12 @@ function _applyTgInsets() {
 
 if (tg) {
   tg.ready();
-  tg.expand();
+  // tg.expand(); // Disabled auto-expand
   // Match Telegram chrome to app theme
   if (tg.setHeaderColor) tg.setHeaderColor('#0d0d0f');
   if (tg.setBackgroundColor) tg.setBackgroundColor('#0d0d0f');
   // Request fullscreen (Bot API 8.0+)
-  if (tg.requestFullscreen) tg.requestFullscreen();
+  // if (tg.requestFullscreen) tg.requestFullscreen(); // Disabled auto-fullscreen
   // Re-apply JS fallback on any layout change
   tg.onEvent('fullscreen_changed',       _applyTgInsets);
   tg.onEvent('fullscreen_failed',        _applyTgInsets);
@@ -1125,11 +1125,21 @@ function renderDetailFull(c) {
   // Outcomes
   const outcomesList = document.getElementById('d-outcomes-list');
   const loadingEl = document.getElementById('d-outcomes-loading');
-  const outcomes = c.outcomes || [];
+  let outcomes = c.outcomes || [];
+  
+  // Filter outcomes to match target wear if specified
+  if (c.target_wear && outcomes.length > 0) {
+    const targetWearLower = c.target_wear.toLowerCase();
+    outcomes = outcomes.filter(o => {
+      const outWearLower = (o.wear || '').toLowerCase();
+      return outWearLower === targetWearLower || outWearLower.includes(targetWearLower);
+    });
+  }
+  
   loadingEl.style.display = 'none';
 
   if (outcomes.length === 0) {
-    outcomesList.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px 0">Outcomes computing…</div>';
+    outcomesList.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px 0">No matching outcomes</div>';
   } else {
     outcomesList.innerHTML = outcomes.map(o => {
       const prob = parseFloat(o.probability) || 0;
