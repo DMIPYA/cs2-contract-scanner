@@ -123,6 +123,7 @@ class ContractCalculator:
 
         self._memo_listings: Dict[Tuple, List[Tuple[float, Optional[float], str]]] = {}
         self._memo_effective_sell_price: Dict[Tuple, Optional[float]] = {}
+        self._memo_max_input_float: Dict[Tuple[str, str], Optional[float]] = {}  # NEW: Cache for max input float calculations
 
     def get_last_target_suite_diagnostics(self) -> Optional[Dict]:
         return self._last_target_suite_diagnostics
@@ -138,6 +139,125 @@ class ContractCalculator:
         if w == 'Well-Worn':
             return 0.44
         return 1.0
+
+    def _calculate_max_input_float_for_target_wear(
+        self,
+        output_skin_name: str,
+        target_wear: str
+    ) -> Optional[float]:
+        """
+        Calculate maximum normalized float for input skins to guarantee target wear output.
+        
+        This function determines the maximum float value that input skins can have
+        to ensure the output skin will be of the specified wear quality. It accounts
+        for the skin's min/max float range and normalizes the threshold accordingly.
+        
+        Args:
+            output_skin_name: Name of the output skin (e.g., "FAMAS | Rapid Eye Movement")
+            target_wear: Target wear level (e.g., "Factory New", "Minimal Wear")
+        
+        Returns:
+            float: Maximum normalized float [0.0, 1.0] for input skins
+            None: If target wear is unachievable for this skin
+        
+        Examples:
+            >>> calc._calculate_max_input_float_for_target_wear(
+            ...     "FAMAS | Rapid Eye Movement",
+            ...     "Factory New"
+            ... )
+            0.07  # Normalized threshold for FN
+            
+            >>> calc._calculate_max_input_float_for_target_wear(
+            ...     "AWP | Asiimov",  # min_float=0.18
+            ...     "Factory New"     # threshold=0.07
+            ... )
+            None  # Unachievable (min_float > threshold)
+        
+        Notes:
+            - Uses wear thresholds: FN=0.07, MW=0.15, FT=0.38, WW=0.45, BS=1.00
+            - Result is cached for performance
+            - Thread-safe through memoization lock
+        """
+        # Check cache first
+        cache_key = (output_skin_name, target_wear)
+        with self._memo_lock:
+            if cache_key in self._memo_max_input_float:
+                return self._memo_max_input_float[cache_key]
+        
+        # Get skin data from database
+        skin_data = self.database.get_skin_by_name(output_skin_name)
+        if not skin_data:
+            self._logger.warning(
+                'Skin not found in database: %s',
+                output_skin_name
+            )
+            with self._memo_lock:
+                self._memo_max_input_float[cache_key] = None
+            return None
+        
+        try:
+            min_float = float(skin_data.min_float)
+            max_float = float(skin_data.max_float)
+        except (AttributeError, TypeError, ValueError) as e:
+            self._logger.warning(
+                'Invalid float data for skin %s: %s',
+                output_skin_name,
+                e
+            )
+            with self._memo_lock:
+                self._memo_max_input_float[cache_key] = None
+            return None
+        
+        # Get threshold for target wear
+        WEAR_THRESHOLDS = {
+            'Factory New': 0.07,
+            'Minimal Wear': 0.15,
+            'Field-Tested': 0.38,
+            'Well-Worn': 0.45,
+            'Battle-Scarred': 1.00,
+        }
+        max_output_float = WEAR_THRESHOLDS.get(target_wear, 1.0)
+        
+        # Check if target wear is achievable
+        if min_float > max_output_float:
+            # Skin cannot be this wear (e.g., AWP Asiimov cannot be Factory New)
+            self._logger.debug(
+                'Target wear %s unachievable for %s (min_float=%.3f > threshold=%.3f)',
+                target_wear,
+                output_skin_name,
+                min_float,
+                max_output_float
+            )
+            with self._memo_lock:
+                self._memo_max_input_float[cache_key] = None
+            return None
+        
+        # Calculate float range
+        float_range = max_float - min_float
+        if float_range < 1e-9:
+            # Invalid or zero range
+            self._logger.warning(
+                'Invalid float range for %s: min=%.3f max=%.3f',
+                output_skin_name,
+                min_float,
+                max_float
+            )
+            with self._memo_lock:
+                self._memo_max_input_float[cache_key] = None
+            return None
+        
+        # Normalize threshold to [0, 1] range relative to skin's float range
+        # Formula: (target_threshold - min_float) / (max_float - min_float)
+        normalized_threshold = (max_output_float - min_float) / float_range
+        
+        # Clamp to [0, 1] to handle edge cases
+        normalized_threshold = max(0.0, min(1.0, normalized_threshold))
+        
+        # Cache result
+        with self._memo_lock:
+            self._memo_max_input_float[cache_key] = normalized_threshold
+        
+        return normalized_threshold
 
     def _avg_outcome_price_for_collection(
         self,
@@ -235,6 +355,214 @@ class ContractCalculator:
                 best_wear = w
         return best_wear
 
+    def _find_achievable_target_wear(
+        self,
+        output_skin_name: str,
+        preferred_wear: str,
+        collection_name: str,
+        input_rarity: str,
+        *,
+        is_stattrak: bool
+    ) -> Optional[Tuple[str, float]]:
+        """
+        Find the first achievable wear level with automatic fallback.
+        
+        This function attempts to find a wear level that is both:
+        1. Achievable for the output skin (based on its float range)
+        2. Has available input skins on the market with required float
+        
+        If the preferred wear is not achievable, it automatically falls back
+        to the next worse wear in the chain: FN → MW → FT → WW → BS
+        
+        Args:
+            output_skin_name: Name of the output skin (e.g., "FAMAS | Rapid Eye Movement")
+            preferred_wear: Preferred target wear (e.g., "Factory New")
+            collection_name: Collection name for input skins
+            input_rarity: Rarity of input skins (e.g., "Restricted")
+            is_stattrak: Whether to search for StatTrak skins
+        
+        Returns:
+            tuple: (achievable_wear, max_input_float) if found
+            None: If no wear is achievable
+        
+        Examples:
+            >>> calc._find_achievable_target_wear(
+            ...     "AWP | Asiimov",  # min_float=0.18
+            ...     "Factory New",    # Unachievable
+            ...     "The Cobblestone Collection",
+            ...     "Classified",
+            ...     is_stattrak=False
+            ... )
+            ("Field-Tested", 0.244)  # Fallback to FT
+        
+        Notes:
+            - Logs fallback events at INFO level
+            - Checks market availability before returning
+            - Returns None if no wear is achievable (rare)
+        """
+        # Fallback chain: try progressively worse wears
+        WEAR_FALLBACK_CHAIN = [
+            'Factory New',
+            'Minimal Wear',
+            'Field-Tested',
+            'Well-Worn',
+            'Battle-Scarred',
+        ]
+        
+        # Find starting position in fallback chain
+        try:
+            start_idx = WEAR_FALLBACK_CHAIN.index(preferred_wear)
+        except ValueError:
+            # Invalid wear name, start from Factory New
+            self._logger.warning(
+                'Invalid preferred wear "%s", starting from Factory New',
+                preferred_wear
+            )
+            start_idx = 0
+        
+        # Try each wear in the fallback chain
+        for wear in WEAR_FALLBACK_CHAIN[start_idx:]:
+            # Step 1: Check if this wear is achievable for the output skin
+            max_float = self._calculate_max_input_float_for_target_wear(
+                output_skin_name,
+                wear
+            )
+            
+            if max_float is None:
+                # This wear is unachievable for this skin, try next
+                self._logger.debug(
+                    'Wear %s unachievable for %s, trying next',
+                    wear,
+                    output_skin_name
+                )
+                continue
+            
+            # Step 2: Check if input skins with required float exist on market
+            # We only need to check availability, so limit=10 is enough
+            try:
+                candidate_inputs = self._get_candidate_inputs(
+                    collection_name,
+                    input_rarity,
+                    is_stattrak=is_stattrak,
+                    max_float=max_float,
+                    limit=10,  # Just checking availability
+                )
+            except Exception as e:
+                self._logger.warning(
+                    'Failed to get candidate inputs for %s (wear=%s): %s',
+                    output_skin_name,
+                    wear,
+                    e
+                )
+                continue
+            
+            if not candidate_inputs:
+                # No input skins available with required float, try next wear
+                self._logger.debug(
+                    'No input skins available for %s with max_float=%.3f (wear=%s)',
+                    output_skin_name,
+                    max_float,
+                    wear
+                )
+                continue
+            
+            # Found achievable wear with available inputs!
+            if wear != preferred_wear:
+                # Log fallback event
+                self._logger.info(
+                    'Fallback: %s → %s for %s (ST=%s, available_inputs=%d)',
+                    preferred_wear,
+                    wear,
+                    output_skin_name,
+                    'Y' if is_stattrak else 'N',
+                    len(candidate_inputs)
+                )
+            
+            return (wear, max_float)
+        
+        # No achievable wear found (very rare)
+        self._logger.warning(
+            'No achievable wear found for %s (preferred=%s, ST=%s)',
+            output_skin_name,
+            preferred_wear,
+            'Y' if is_stattrak else 'N'
+        )
+        return None
+
+    def _validate_contract_outcomes(
+        self,
+        contract: Dict,
+        target_wear: str,
+        *,
+        is_stattrak: bool
+    ) -> bool:
+        """
+        Validate that at least one contract outcome matches the target wear quality.
+        
+        This ensures that contracts shown to users can actually produce the desired
+        wear quality output, preventing the bug where Factory New targets show
+        Battle-Scarred outcomes.
+        
+        Args:
+            contract: Contract dictionary with 'input_skins' key
+            target_wear: Expected wear quality (e.g., 'Factory New')
+            is_stattrak: Whether this is a StatTrak contract
+            
+        Returns:
+            True if at least one outcome matches target_wear, False otherwise
+            
+        Example:
+            >>> contract = {'input_skins': [...], 'outcomes': [...]}
+            >>> calculator._validate_contract_outcomes(
+            ...     contract, 'Factory New', is_stattrak=False
+            ... )
+            True
+        """
+        try:
+            # Get contract outcomes
+            input_skins = contract.get('input_skins') or []
+            if not input_skins:
+                self._logger.debug('Contract has no input skins, validation failed')
+                return False
+            
+            outcomes = self.calculate_contract_outcomes_details(
+                input_skins,
+                is_stattrak=is_stattrak
+            )
+            
+            if not outcomes:
+                self._logger.debug('Contract has no outcomes, validation failed')
+                return False
+            
+            # Check if any outcome matches target wear
+            matching_outcomes = [
+                o for o in outcomes
+                if o.get('wear') == target_wear
+            ]
+            
+            if matching_outcomes:
+                self._logger.debug(
+                    'Contract validation passed: %d/%d outcomes match %s',
+                    len(matching_outcomes),
+                    len(outcomes),
+                    target_wear
+                )
+                return True
+            else:
+                self._logger.debug(
+                    'Contract validation failed: no outcomes match %s (outcomes: %s)',
+                    target_wear,
+                    [o.get('wear') for o in outcomes]
+                )
+                return False
+                
+        except Exception as e:
+            self._logger.warning(
+                'Failed to validate contract outcomes: %s',
+                e
+            )
+            return False
+
     def _get_candidate_inputs(
         self,
         collection_name: str,
@@ -243,7 +571,35 @@ class ContractCalculator:
         is_stattrak: bool,
         max_float: float,
         limit: int,
+        target_output_skin: Optional[str] = None,
+        target_wear: Optional[str] = None,
     ) -> List[Dict]:
+        """
+        Get candidate input skins for trade-up contract.
+        
+        Args:
+            collection_name: Name of the collection
+            input_rarity: Rarity of input skins
+            is_stattrak: Whether to search for StatTrak skins
+            max_float: Maximum float value for input skins
+            limit: Maximum number of skins to return
+            target_output_skin: Optional target output skin name for float filtering
+            target_wear: Optional target wear quality for float filtering
+            
+        Returns:
+            List of candidate input skins with price, float, and wear data
+        """
+        # NEW: Calculate max_float if target specified
+        if target_output_skin and target_wear:
+            calculated_max_float = self._calculate_max_input_float_for_target_wear(
+                target_output_skin,
+                target_wear
+            )
+            if calculated_max_float is None:
+                # Target wear is unachievable for this output skin
+                return []
+            max_float = calculated_max_float
+        
         lim = int(max(1, limit))
 
         skins = self._get_main_skins(
@@ -1220,29 +1576,35 @@ class ContractCalculator:
                 best_wear = str(t.get('target_wear') or 'Minimal Wear')
                 outcomes_count_for_target = int(t.get('outcomes_count') or 0)
 
-                max_float = self._wear_to_max_float(best_wear)
-                # По умолчанию ограничиваем входной float так, чтобы выходной wear соответствовал
-                # best_wear (самому доходному). Можно переопределить через HUNT_INPUT_MAX_FLOAT.
-                effective_max_float_default = str(os.getenv('HUNT_INPUT_MAX_FLOAT', '') or '').strip()
-                try:
-                    effective_max_float = float(effective_max_float_default) if effective_max_float_default else float(max_float)
-                except Exception:
-                    effective_max_float = float(max_float)
-                try:
-                    if self._normalize_rarity(input_rarity) == 'Industrial':
-                        ind_override = str(os.getenv('INDUSTRIAL_INPUT_MAX_FLOAT', '') or '').strip()
-                        if ind_override:
-                            effective_max_float = float(ind_override)
-                except Exception:
-                    pass
+                # NEW: Find achievable target wear with fallback logic
+                achievable_result = self._find_achievable_target_wear(
+                    target_skin,
+                    best_wear,
+                    target_c,
+                    input_rarity,
+                    is_stattrak=is_stattrak
+                )
+                
+                if achievable_result is None:
+                    # No achievable wear found for this target, skip it
+                    continue
+                
+                target_wear, calculated_max_float = achievable_result
+                
+                # Use the achievable wear and calculated max_float
+                # (this replaces the old best_wear and effective_max_float logic)
+
+                max_float = self._wear_to_max_float(target_wear)
 
                 _t1 = time.perf_counter() if prof else 0.0
                 target_items = self._get_candidate_inputs(
                     target_c,
                     input_rarity,
                     is_stattrak=is_stattrak,
-                    max_float=effective_max_float,
+                    max_float=calculated_max_float,  # Use calculated max_float
                     limit=int(max(10, target_items_limit)),
+                    target_output_skin=target_skin,  # NEW: Pass target for validation
+                    target_wear=target_wear,          # NEW: Pass target wear
                 )
                 if prof:
                     prof_totals['get_inputs_s'] += float(time.perf_counter() - _t1)
@@ -1284,10 +1646,10 @@ class ContractCalculator:
                     virtual_stack_enabled = str(os.getenv('HUNT_VIRTUAL_STACK', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
 
                     # prefer_wear controls float penalty in stack sorting.
-                    # Use best_wear for this collection so we select items whose float
+                    # Use target_wear for this collection so we select items whose float
                     # matches the optimal output wear rather than always pushing toward FN.
                     _prefer_wear_override = str(os.getenv('HUNT_PREFER_OUT_WEAR', '') or '').strip()
-                    prefer_wear = _prefer_wear_override if _prefer_wear_override else best_wear
+                    prefer_wear = _prefer_wear_override if _prefer_wear_override else target_wear
                     wear_thr = {
                         'Factory New': 0.07,
                         'Minimal Wear': 0.15,
@@ -1387,7 +1749,7 @@ class ContractCalculator:
                                 input_rarity,
                                 int(max(200, filler_cnt * 80)),
                                 is_stattrak,
-                                target_float_threshold=float(effective_max_float) if float(effective_max_float) < 0.999 else None,
+                                target_float_threshold=float(calculated_max_float) if float(calculated_max_float) < 0.999 else None,
                                 max_price=None,
                             )
                             if len(fillers) <= 0:
@@ -1604,7 +1966,7 @@ class ContractCalculator:
                                 'filler_skins_count': int(filler_cnt),
                                 'hunt_output': str(current_best_out.get('name') or ''),
                                 'hunt_output_price': float(current_best_out.get('price') or 0.0),
-                                'hunt_target_wear': best_wear,
+                                'hunt_target_wear': target_wear,  # Use achievable target_wear
                                 'hunt_expected_wear': self._determine_best_achievable_wear(float(current_eval.get('average_normalized_float') or 0.0)),
                                 'hunt_input_rarity': self._normalize_rarity(input_rarity),
                                 'hunt_filler_collection': filler_c,
@@ -1616,6 +1978,24 @@ class ContractCalculator:
                                 'craftable': True,
                                 'craftability_min_depth': int(craftability.get('min_depth') or 0),
                             })
+                            
+                            # NEW: Validate that contract outcomes match target wear
+                            contract_for_validation = {
+                                'input_skins': current
+                            }
+                            is_valid = self._validate_contract_outcomes(
+                                contract_for_validation,
+                                target_wear,
+                                is_stattrak=is_stattrak
+                            )
+                            
+                            if not is_valid:
+                                # Contract outcomes don't match target wear, skip it
+                                self._logger.debug(
+                                    'Skipping contract: outcomes do not match target wear %s',
+                                    target_wear
+                                )
+                                continue
 
                             if input_cost_f > 0.0:
                                 item['ev_per_cost'] = float(expected_output_f) / float(input_cost_f)
