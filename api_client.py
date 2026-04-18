@@ -1492,6 +1492,9 @@ class CSFloatClient:
 
         self._session = requests.Session()
         self._session.headers.update({'User-Agent': 'CS2-Contract-Analyzer/1.0'})
+        # Explicitly bypass any system/env proxy (HTTP_PROXY, HTTPS_PROXY, ALL_PROXY)
+        # CSFloat must connect directly — proxy IPs get rate-limited quickly
+        self._session.trust_env = False
 
         self._cache_lock = threading.RLock()
         self._listings_cache: Dict[Tuple[str, str, int], Tuple[float, List[Dict]]] = {}
