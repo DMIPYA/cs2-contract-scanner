@@ -1958,16 +1958,45 @@ class ContractCalculator:
                                 rarity_stats['contracts_jackpot_ok'] = int(rarity_stats.get('contracts_jackpot_ok') or 0) + 1
 
                             item = dict(current_eval)
+                            
+                            # Calculate expected wear for the hunt output skin
+                            # Use the same logic as in calculate_contract_outcomes_details
+                            hunt_output_name = str(current_best_out.get('name') or '')
+                            avg_norm_float = float(current_eval.get('average_normalized_float') or 0.0)
+                            
+                            # Get output skin data to calculate real float
+                            output_skin_data = self.database.get_skin_by_name(hunt_output_name)
+                            if output_skin_data:
+                                try:
+                                    out_min_f = float(output_skin_data.min_float)
+                                    out_max_f = float(output_skin_data.max_float)
+                                except Exception:
+                                    out_min_f, out_max_f = 0.0, 1.0
+                            else:
+                                out_min_f, out_max_f = 0.0, 1.0
+                            
+                            # Clamp values
+                            if out_min_f < 0.0:
+                                out_min_f = 0.0
+                            if out_max_f > 1.0:
+                                out_max_f = 1.0
+                            if out_max_f <= out_min_f + 1e-9:
+                                out_min_f, out_max_f = 0.0, 1.0
+                            
+                            # Calculate real output float: Float_out = (Avg_norm * (Max - Min)) + Min
+                            expected_out_float = avg_norm_float * (out_max_f - out_min_f) + out_min_f
+                            expected_wear = self._determine_wear_from_float(expected_out_float)
+                            
                             item.update({
                                 'target_collection': target_c,
                                 'is_stattrak': bool(is_stattrak),
                                 'input_skins': current,
                                 'main_skins_count': int(target_cnt),
                                 'filler_skins_count': int(filler_cnt),
-                                'hunt_output': str(current_best_out.get('name') or ''),
+                                'hunt_output': hunt_output_name,
                                 'hunt_output_price': float(current_best_out.get('price') or 0.0),
                                 'hunt_target_wear': target_wear,  # Use achievable target_wear
-                                'hunt_expected_wear': self._determine_best_achievable_wear(float(current_eval.get('average_normalized_float') or 0.0)),
+                                'hunt_expected_wear': expected_wear,  # Use calculated wear from real float
                                 'hunt_input_rarity': self._normalize_rarity(input_rarity),
                                 'hunt_filler_collection': filler_c,
                                 'chance_of_target': float(current_chance_target),
@@ -3256,7 +3285,6 @@ class ContractCalculator:
 
                         out_prob = float(current_eval.get('output_probability') or 0.0)
                         avg_norm_float = float(current_eval.get('average_normalized_float') or 0.0)
-                        expected_wear = self._determine_best_achievable_wear(avg_norm_float)
 
                         out_name = None
                         out_price = 0.0
@@ -3273,6 +3301,33 @@ class ContractCalculator:
                             if p and float(p) > out_price:
                                 out_price = float(p)
                                 out_name = o['name']
+                        
+                        # Calculate expected wear for the hunt output skin
+                        # Use the same logic as in calculate_contract_outcomes_details
+                        if out_name:
+                            output_skin_data = self.database.get_skin_by_name(out_name)
+                            if output_skin_data:
+                                try:
+                                    out_min_f = float(output_skin_data.min_float)
+                                    out_max_f = float(output_skin_data.max_float)
+                                except Exception:
+                                    out_min_f, out_max_f = 0.0, 1.0
+                            else:
+                                out_min_f, out_max_f = 0.0, 1.0
+                            
+                            # Clamp values
+                            if out_min_f < 0.0:
+                                out_min_f = 0.0
+                            if out_max_f > 1.0:
+                                out_max_f = 1.0
+                            if out_max_f <= out_min_f + 1e-9:
+                                out_min_f, out_max_f = 0.0, 1.0
+                            
+                            # Calculate real output float: Float_out = (Avg_norm * (Max - Min)) + Min
+                            expected_out_float = avg_norm_float * (out_max_f - out_min_f) + out_min_f
+                            expected_wear = self._determine_wear_from_float(expected_out_float)
+                        else:
+                            expected_wear = 'Battle-Scarred'  # Fallback if no output found
 
                         item = dict(current_eval)
                         item.update({
@@ -4338,16 +4393,44 @@ class ContractCalculator:
                 if max_investment and contract_data['input_cost'] > max_investment:
                     continue
 
+                # Calculate expected wear for the hunt output skin
+                # Use the same logic as in calculate_contract_outcomes_details
+                hunt_output_name = t.get('max_output_name')
+                avg_norm_float = float(contract_data.get('average_normalized_float') or 0.0)
+                
+                # Get output skin data to calculate real float
+                output_skin_data = self.database.get_skin_by_name(hunt_output_name) if hunt_output_name else None
+                if output_skin_data:
+                    try:
+                        out_min_f = float(output_skin_data.min_float)
+                        out_max_f = float(output_skin_data.max_float)
+                    except Exception:
+                        out_min_f, out_max_f = 0.0, 1.0
+                else:
+                    out_min_f, out_max_f = 0.0, 1.0
+                
+                # Clamp values
+                if out_min_f < 0.0:
+                    out_min_f = 0.0
+                if out_max_f > 1.0:
+                    out_max_f = 1.0
+                if out_max_f <= out_min_f + 1e-9:
+                    out_min_f, out_max_f = 0.0, 1.0
+                
+                # Calculate real output float: Float_out = (Avg_norm * (Max - Min)) + Min
+                expected_out_float = avg_norm_float * (out_max_f - out_min_f) + out_min_f
+                expected_wear = self._determine_wear_from_float(expected_out_float)
+                
                 contract_data.update({
                     'target_collection': target_collection,
                     'is_stattrak': is_stattrak,
                     'input_skins': contract_skins,
                     'main_skins_count': main_count,
                     'filler_skins_count': filler_count,
-                    'hunt_output': t.get('max_output_name'),
+                    'hunt_output': hunt_output_name,
                     'hunt_output_price': t.get('max_output_price'),
                     'hunt_target_wear': t.get('target_wear'),
-                    'hunt_expected_wear': self._determine_best_achievable_wear(float(contract_data.get('average_float') or 0.0)),
+                    'hunt_expected_wear': expected_wear,  # Use calculated wear from real float
                     'hunt_input_rarity': input_rarity,
                     'hunt_filler_collection': "+".join(used_collections) if used_collections else None,
                     'hunt_filler_outcomes': (
