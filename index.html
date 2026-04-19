@@ -1093,8 +1093,10 @@ function renderDetailFull(c) {
   document.getElementById('d-route-input').textContent = (c.rarity || 'Mil-Spec') + ' inputs';
   document.getElementById('d-route-output').textContent = c.name || '';
   const wearEl = document.getElementById('d-route-wear');
-  if (c.target_wear) {
-    wearEl.textContent = c.target_wear.toUpperCase();
+  // Use expected_wear (actual quality based on float calculation) instead of target_wear (desired quality)
+  const displayWear = c.expected_wear || c.target_wear;
+  if (displayWear) {
+    wearEl.textContent = displayWear.toUpperCase();
     wearEl.style.display = '';
   } else {
     wearEl.style.display = 'none';
