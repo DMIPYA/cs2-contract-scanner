@@ -468,8 +468,8 @@ class ContractCalculator:
             
             # Found achievable wear with available inputs!
             if wear != preferred_wear:
-                # Log fallback event
-                self._logger.info(
+                # Log fallback event только для debug режима
+                self._logger.debug(
                     'Fallback: %s → %s for %s (ST=%s, available_inputs=%d)',
                     preferred_wear,
                     wear,

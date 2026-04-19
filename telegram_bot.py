@@ -1252,16 +1252,28 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     msg = str(err or '')
     low = msg.lower()
+    err_type = type(err).__name__ if err else 'unknown'
+
+    # КРИТИЧНО: ConflictError означает что бот запущен в двух местах одновременно
+    if 'conflict' in low or err_type.lower() == 'conflict':
+        logger.critical(
+            '⚠️ CONFLICT ERROR: Бот уже запущен в другом процессе! '
+            'Остановите все другие экземпляры бота. '
+            'Проверьте: VS Code, Docker, серверы, локальные процессы.'
+        )
+        # Останавливаем текущий экземпляр чтобы не создавать бесконечный цикл перезапусков
+        import sys
+        sys.exit(1)
 
     now = time.time()
     # Throttle repeating network errors.
     if 'connect' in low or 'timeout' in low or 'networkerror' in low:
         if (now - float(_last_net_err_log_ts or 0.0)) >= 60.0:
             _last_net_err_log_ts = now
-            logger.error('Telegram network error (retrying): %s', type(err).__name__ if err else 'unknown')
+            logger.error('Telegram network error (retrying): %s', err_type)
         return
 
-    logger.error('Unhandled bot error: %s', type(err).__name__ if err else 'unknown')
+    logger.error('Unhandled bot error: %s', err_type)
 
 
 def main() -> None:
@@ -1369,9 +1381,10 @@ def main() -> None:
         app.bot_data.setdefault('notify_chat_ids', set())
         app.bot_data.setdefault('cache_ready_notified', False)
         app.bot_data.setdefault('chat_prefs', {})
-        app.create_task(_cache_ready_notifier(app))
-        app.create_task(_notice_worker(app))
-        app.create_task(_details_warmup_worker(app))
+        # Создаем задачи после полной инициализации приложения
+        asyncio.create_task(_cache_ready_notifier(app))
+        asyncio.create_task(_notice_worker(app))
+        asyncio.create_task(_details_warmup_worker(app))
 
     proxy_url = _build_proxy_url_from_env()
     req_kwargs = {
