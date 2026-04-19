@@ -95,9 +95,6 @@ class TargetHuntingService:
         logger.info('Price manager initialized in %.1fs', time.time() - pm_start)
         self.calculator = ContractCalculator(self.database, self.price_manager)
         logger.info('Initialized TargetHuntingService OK')
-        # Запускаем фоновый воркер сразу — он перезагрузит свежие цены из API
-        # (т.к. _last_update_time не установлен при загрузке устаревшего кэша)
-        # и пересчитает результаты без блокировки HTTP-запросов.
         self.start_refresher()
 
     def stop(self) -> None:
@@ -126,7 +123,6 @@ class TargetHuntingService:
             min_roi_pct = float(os.getenv('HUNT_MIN_ROI_PCT', '2.0') or 2.0)
         except Exception:
             min_roi_pct = 2.0
-        # SAFE mode: guaranteed-profit contracts — relax ROI/imbalance to maximise count
         if calc_mode == 'SAFE':
             min_roi_pct = float(os.getenv('HUNT_SAFE_MIN_ROI_PCT', '0.5') or 0.5)
 
@@ -168,8 +164,6 @@ class TargetHuntingService:
         except Exception:
             min_net_profit = 0.0
 
-        # SAFE mode scans all rarities (including Consumer) since PP=100% is rare
-        # and we want the widest possible search.
         input_rarities_override = None
         if calc_mode == 'SAFE':
             input_rarities_override = ['Consumer', 'Industrial', 'Mil-Spec', 'Restricted', 'Classified']
@@ -289,8 +283,6 @@ class TargetHuntingService:
         with self._cache_lock:
             entry = dict(self._cache.get(cache_mode) or {})
 
-        # Cache is considered "ready" after at least one refresh attempt finished.
-        # Results can legitimately be an empty list (no bundles found for current logic).
         try:
             ts = float(entry.get('timestamp') or 0.0)
         except Exception:
@@ -330,19 +322,16 @@ class TargetHuntingService:
                 'last_error': None,
             })
             if self._cache[cache_mode].get('refreshing'):
-                logger.info('⚠️ Refresh already in progress for mode=%s, skipping', cache_mode)
+                logger.info('Refresh already in progress for mode=%s, skipping', cache_mode)
                 return
             self._cache[cache_mode]['refreshing'] = True
 
-        # Reset CSFloat session limits at the start of each refresh cycle so that
-        # a quota exhaustion in the previous cycle does not permanently block the client.
         try:
             pm = getattr(self, 'price_manager', None)
             cfc = getattr(pm, 'csfloat_client', None) if pm is not None else None
             if cfc is not None and hasattr(cfc, 'reset_session_limits'):
                 if getattr(cfc, '_session_disabled', False):
                     cfc.reset_session_limits()
-            # Reset float optimization dedup cache so next cycle uses fresh market data
             if hasattr(self.calculator, '_float_opt_session_cache'):
                 self.calculator._float_opt_session_cache.clear()
         except Exception:
@@ -350,44 +339,40 @@ class TargetHuntingService:
 
         try:
             start_ts = time.time()
-            logger.info('🔄 Refreshing mode=%s (calc_mode=%s)...', cache_mode, calc_mode)
+            logger.info('Refreshing mode=%s (calc_mode=%s)...', cache_mode, calc_mode)
 
-            # НОВОЕ: Принудительно обновляем кэш цен при ручном refresh
             try:
                 pm = getattr(self, 'price_manager', None)
                 if pm is not None:
-                    logger.info('💰 Refreshing price cache...')
+                    logger.info('Refreshing price cache...')
                     price_refresh_start = time.time()
-                    ok = bool(pm.refresh_prices(force_refresh=True))  # Принудительное обновление
+                    ok = bool(pm.refresh_prices(force_refresh=True))
                     price_refresh_dur = time.time() - price_refresh_start
                     if ok:
-                        logger.info('✅ Price cache refreshed in %.1fs', price_refresh_dur)
-                        # Очищаем мемоизацию калькулятора после обновления цен
+                        logger.info('Price cache refreshed in %.1fs', price_refresh_dur)
                         calc = getattr(self, 'calculator', None)
                         if calc is not None and hasattr(calc, 'clear_price_memoization'):
                             try:
                                 calc.clear_price_memoization()
-                                logger.info('🧹 Calculator memoization cleared')
+                                logger.info('Calculator memoization cleared')
                             except Exception:
                                 logger.debug('Failed to clear calculator memoization', exc_info=True)
                     else:
-                        logger.warning('⚠️ Price cache refresh failed, using existing cache')
+                        logger.warning('Price cache refresh failed, using existing cache')
             except Exception as e:
-                logger.warning('⚠️ Price cache refresh error: %s', e)
+                logger.warning('Price cache refresh error: %s', e)
 
             try:
                 max_results = int(os.getenv('HUNT_MAX_RESULTS', '200') or 200)
             except Exception:
                 max_results = 200
 
-            # Compute both normal and StatTrak before publishing to avoid UI inconsistency.
-            logger.info('🔍 Computing contracts (Normal + StatTrak)...')
+            logger.info('Computing contracts (Normal + StatTrak)...')
             updated_no = self._compute_results_part(calc_mode=calc_mode, is_stattrak=False)
             updated_st = self._compute_results_part(calc_mode=calc_mode, is_stattrak=True)
             updated = list(updated_no) + list(updated_st)
-            logger.info('📊 Found %d contracts (Normal: %d, StatTrak: %d)', len(updated), len(updated_no), len(updated_st))
+            logger.info('Found %d contracts (Normal: %d, StatTrak: %d)', len(updated), len(updated_no), len(updated_st))
 
-            # Sort/trim using the existing logic.
             if updated:
                 def _sort_key(r: Dict) -> float:
                     return float(
@@ -402,7 +387,6 @@ class TargetHuntingService:
                 updated.sort(key=_sort_key, reverse=True)
                 updated = updated[: int(max_results)]
 
-            # Precompute outcomes for top-N contracts before publishing.
             try:
                 warm_n = int(os.getenv('OUTCOMES_WARMUP_TOPN') or 30)
             except Exception:
@@ -443,14 +427,13 @@ class TargetHuntingService:
                     pass
 
             if calc is not None and warm_n > 0:
-                logger.info('🔥 Warming up top %d contracts...', warm_n)
+                logger.info('Warming up top %d contracts...', warm_n)
                 for r in updated[:warm_n]:
                     try:
                         _precompute_for(r)
                     except Exception:
                         pass
 
-            # Publish only after full ST+non-ST and warmup is ready.
             publish_ts = time.time()
             dur = time.time() - start_ts
             with self._cache_lock:
@@ -461,7 +444,6 @@ class TargetHuntingService:
                     'last_error': None,
                 }
 
-            # Warm remaining outcomes in background (does not block publication).
             try:
                 if calc is not None and warm_n < len(updated):
                     remaining = list(updated[warm_n:])
@@ -472,7 +454,6 @@ class TargetHuntingService:
                                 _precompute_for(rr)
                             except Exception:
                                 continue
-                        # Persist back into cache if snapshot still matches.
                         try:
                             with self._cache_lock:
                                 cur = dict(self._cache.get(cache_mode) or {})
@@ -482,7 +463,6 @@ class TargetHuntingService:
                                 if abs(cur_ts - float(ts_snapshot)) > 1e-6:
                                     return
                                 cur_results = list(cur.get('results') or [])
-                                # Update by identity (same dict objects are expected, but be defensive).
                                 self._cache[cache_mode] = {
                                     'results': cur_results,
                                     'timestamp': float(cur_ts),
@@ -497,9 +477,9 @@ class TargetHuntingService:
             except Exception:
                 logger.debug('Failed to start background outcomes warmup', exc_info=True)
 
-            logger.info('✅ Refreshed mode=%s: %s items in %.1fs', cache_mode, len(updated), dur)
+            logger.info('Refreshed mode=%s: %s items in %.1fs', cache_mode, len(updated), dur)
         except Exception as e:
-            logger.exception('❌ Failed refreshing mode=%s', cache_mode)
+            logger.exception('Failed refreshing mode=%s', cache_mode)
             with self._cache_lock:
                 prev = dict(self._cache.get(cache_mode) or {})
                 prev['refreshing'] = False
@@ -580,7 +560,6 @@ class TargetHuntingService:
                 if (not self._refresh_running.is_set()) and to_refresh:
                     self._refresh_running.set()
                     try:
-                        # Update price cache before recomputing hunting results so $ profit values actually change.
                         try:
                             pm = getattr(self, 'price_manager', None)
                             if pm is not None:
@@ -620,3 +599,14 @@ class TargetHuntingService:
                 'last_error': v.get('last_error'),
             }
         return out
+
+    def refresh_background(self) -> None:
+        """Trigger a background refresh of all modes without blocking."""
+        def _run():
+            for m in ['PROFIT', 'SAFE']:
+                try:
+                    self.refresh_mode(m)
+                except Exception:
+                    logger.debug('Background refresh failed for mode=%s', m, exc_info=True)
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()

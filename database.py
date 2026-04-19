@@ -193,12 +193,6 @@ class CS2Database:
             if k.lower() == n_low:
                 return v
 
-        # Partial matching can return wrong float ranges; keep as last resort.
-        for k, v in self.skins_by_name.items():
-            kl = k.lower()
-            if n_low in kl or kl in n_low:
-                return v
-
         return None
     
     def get_skin_collection(self, skin_name: str) -> Optional[str]:

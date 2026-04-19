@@ -118,7 +118,7 @@ async def _details_warmup_worker(app: Application) -> None:
             svc = app.bot_data.get('svc')
             if svc is not None:
                 await asyncio.to_thread(_warmup_contract_texts, svc=svc, mode='PROFIT')
-                await asyncio.to_thread(_warmup_contract_texts, svc=svc, mode='RISK')
+                await asyncio.to_thread(_warmup_contract_texts, svc=svc, mode='SAFE')
         except Exception:
             pass
         await asyncio.sleep(3.0)
@@ -1056,39 +1056,11 @@ async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     assert update.message
     svc = context.application.bot_data.get('svc')
     if not svc:
-        await update.message.reply_text('❌ Service not available')
+        await update.message.reply_text('Service not available')
         return
 
-    try:
-        # Отправляем сообщение о начале обновления
-        msg = await update.message.reply_text('🔄 Starting cache refresh...')
-        
-        # Запускаем обновление в фоне
-        def _refresh_all():
-            try:
-                logger.info('🔄 Manual full refresh started by user')
-                
-                # Обновляем оба режима
-                svc.refresh_mode('PROFIT')
-                svc.refresh_mode('SAFE')
-                
-                logger.info('✅ Manual full refresh completed')
-                return True
-            except Exception as e:
-                logger.error('❌ Manual full refresh failed: %s', e)
-                return False
-        
-        # Запускаем в отдельном потоке
-        result = await asyncio.to_thread(_refresh_all)
-        
-        if result:
-            await msg.edit_text('✅ Cache refresh completed successfully!')
-        else:
-            await msg.edit_text('❌ Cache refresh failed. Check logs for details.')
-            
-    except Exception as e:
-        logger.error('Failed to handle refresh command: %s', e)
-        await update.message.reply_text(f'❌ Error: {e}')
+    await update.message.reply_text('Refresh started in background...')
+    threading.Thread(target=svc.refresh_background, daemon=True).start()
 
 
 async def cmd_hunt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1277,22 +1249,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if kind == 'rf':
             mode = _normalize_mode(parts[1] if len(parts) >= 2 else 'PROFIT')
-            logger.info('🔄 Manual refresh requested: mode=%s', mode)
-            
-            # Проверяем что сервис доступен
+            logger.info('Manual refresh requested: mode=%s', mode)
             if svc is None:
-                logger.error('❌ Service not available for refresh')
                 await q.answer('Service not available', show_alert=True)
                 return
-            
-            # Запускаем refresh в фоне
-            try:
-                asyncio.create_task(asyncio.to_thread(svc.refresh_mode, mode))
-                await q.answer(f'🔄 Refreshing {mode} mode...', show_alert=False)
-                logger.info('✅ Refresh task started for mode=%s', mode)
-            except Exception as e:
-                logger.error('❌ Failed to start refresh task: %s', e)
-                await q.answer('Failed to start refresh', show_alert=True)
+            threading.Thread(target=svc.refresh_mode, args=(mode,), daemon=True).start()
+            await q.answer(f'Refreshing {mode} mode...', show_alert=False)
             return
     except Exception:
         logger.exception('Failed to handle callback: %s', data)
@@ -1313,11 +1275,9 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     # КРИТИЧНО: ConflictError означает что бот запущен в двух местах одновременно
     if 'conflict' in low or err_type.lower() == 'conflict':
         logger.critical(
-            '⚠️ CONFLICT ERROR: Бот уже запущен в другом процессе! '
-            'Остановите все другие экземпляры бота. '
-            'Проверьте: VS Code, Docker, серверы, локальные процессы.'
+            'CONFLICT ERROR: Bot is already running in another process! '
+            'Stop all other bot instances.'
         )
-        # Останавливаем текущий экземпляр чтобы не создавать бесконечный цикл перезапусков
         import sys
         sys.exit(1)
 
@@ -1426,26 +1386,17 @@ def main() -> None:
     
     # Проверяем валидность токена
     if not token or token == 'YOUR_NEW_TOKEN_HERE':
-        logger.error('❌ TELEGRAM_BOT_TOKEN не установлен или недействителен!')
-        logger.error('📋 Инструкция по получению токена:')
-        logger.error('   1. Напишите @BotFather в Telegram')
-        logger.error('   2. Отправьте команду /newbot')
-        logger.error('   3. Следуйте инструкциям для создания бота')
-        logger.error('   4. Скопируйте полученный токен в .env файл')
-        logger.error('   5. Перезапустите бота')
+        logger.error('TELEGRAM_BOT_TOKEN is not set or invalid!')
+        logger.error('Get a token from @BotFather in Telegram (/newbot), then set it in .env')
         raise RuntimeError('TELEGRAM_BOT_TOKEN is not set or invalid in .env')
-    
-    # Проверяем формат токена (должен быть вида: 123456789:ABC-DEF...)
+
     if ':' not in token or len(token.split(':')) != 2:
-        logger.error('❌ TELEGRAM_BOT_TOKEN имеет неверный формат!')
-        logger.error('   Токен должен быть вида: 123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11')
-        logger.error('   Текущий токен: %s', token[:20] + '...' if len(token) > 20 else token)
+        logger.error('TELEGRAM_BOT_TOKEN has invalid format (expected: 123456789:ABC-DEF...)')
         raise RuntimeError('TELEGRAM_BOT_TOKEN has invalid format')
 
     global _service
     _service = TargetHuntingService()
-    _service.initialize()
-    _service.start_refresher()
+    _service.initialize()  # initialize() already calls start_refresher() internally
 
     logger.info('Telegram bot starting...')
 

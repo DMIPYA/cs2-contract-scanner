@@ -883,13 +883,13 @@ class MarketCSGOClient:
         except Exception:
             return "Unknown"
 
-        if f <= 0.07:
+        if f < 0.07:
             return "Factory New"
-        if f <= 0.15:
+        if f < 0.15:
             return "Minimal Wear"
-        if f <= 0.37:
+        if f < 0.38:
             return "Field-Tested"
-        if f <= 0.44:
+        if f < 0.45:
             return "Well-Worn"
         return "Battle-Scarred"
     
@@ -961,22 +961,6 @@ class MarketCSGOClient:
                     if exclude_stattrak and is_stattrak:
                         continue
                     if require_stattrak and (not is_stattrak):
-                        continue
-
-                    if max_float is not None:
-                        if item_float is not None and item_float > max_float:
-                            continue
-
-                    all_prices.append((price, item_float, wear))
-
-        # Если качество запрошено, но в export оно отсутствует/Unknown, то не обнуляем цену.
-        # Fallback: берем самый дешевый ордер для точного имени без фильтра по wear.
-        if (not all_prices) and target_wear:
-            for variant in search_variants:
-                if variant not in cache_snapshot:
-                    continue
-                for price, item_float, wear, is_stattrak in cache_snapshot[variant]:
-                    if exclude_stattrak and is_stattrak:
                         continue
 
                     if max_float is not None:

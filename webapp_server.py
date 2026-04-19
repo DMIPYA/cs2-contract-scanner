@@ -221,7 +221,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                     
                     if denorm_floats:
                         max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
-                        
+
                         # Determine wear quality based on max allowed float
                         if max_allowed_avg_float < 0.07:
                             max_allowed_wear = 'Factory New'
@@ -233,10 +233,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                             max_allowed_wear = 'Well-Worn'
                         else:
                             max_allowed_wear = 'Battle-Scarred'
-    
-                    if denorm_floats:
-                        max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
-    
+
     # Group inputs by (name, wear, float_rounded, collection)
     # Float rounded to 4 decimal places — skins with different floats shown separately
     from collections import OrderedDict
@@ -500,25 +497,25 @@ async def api_refresh() -> dict:
     try:
         svc = _get_svc()
         logger.info('Mini App: Force refresh requested')
-        
-        # Force price cache refresh
-        if hasattr(svc, 'api_client') and svc.api_client:
+
+        # Force price cache refresh via price_manager
+        pm = getattr(svc, 'price_manager', None)
+        if pm is not None:
             logger.info('Mini App: Refreshing price cache...')
-            await svc.api_client.refresh_prices(force=True)
-            logger.info('Mini App: Price cache refreshed')
-        
-        # Clear calculator memoization
-        if hasattr(svc, 'calculator') and svc.calculator:
-            if hasattr(svc.calculator, 'calculate_contract_outcomes_details'):
-                cache = getattr(svc.calculator.calculate_contract_outcomes_details, 'cache', None)
-                if cache:
-                    cache.clear()
-                    logger.info('Mini App: Calculator cache cleared')
-        
-        # Trigger background hunt refresh
+            ok = pm.refresh_prices(force_refresh=True)
+            if ok:
+                logger.info('Mini App: Price cache refreshed')
+                calc = getattr(svc, 'calculator', None)
+                if calc is not None and hasattr(calc, 'clear_price_memoization'):
+                    calc.clear_price_memoization()
+                    logger.info('Mini App: Calculator memoization cleared')
+            else:
+                logger.warning('Mini App: Price cache refresh failed')
+
+        # Trigger background contract hunt refresh
         logger.info('Mini App: Triggering contract hunt refresh...')
         svc.refresh_background()
-        
+
         return {'ok': True, 'message': 'Refresh started'}
     except Exception as e:
         logger.exception('Mini App refresh failed')
