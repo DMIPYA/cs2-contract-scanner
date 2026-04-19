@@ -2905,17 +2905,19 @@ class ContractCalculator:
         if not wear:
             return None
         w = str(wear)
-        # Default estimates (midpoint of each wear range)
+        # Upper boundary of each wear range — used for normalization so that
+        # the computed avg_norm reflects the worst-case (highest) float for the wear,
+        # which maps correctly to the output skin's wear quality.
         if w == 'Factory New':
-            estimated = 0.035
+            estimated = 0.0699
         elif w == 'Minimal Wear':
-            estimated = 0.11
+            estimated = 0.1499
         elif w == 'Field-Tested':
-            estimated = 0.26
+            estimated = 0.3799
         elif w == 'Well-Worn':
-            estimated = 0.405
+            estimated = 0.4499
         elif w == 'Battle-Scarred':
-            estimated = 0.725
+            estimated = 0.9999
         else:
             return None
         # Clamp to skin's actual float range if skin_name provided

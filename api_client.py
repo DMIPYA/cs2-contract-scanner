@@ -494,17 +494,20 @@ class MarketCSGOClient:
             if normalized_name not in new_cache:
                 new_cache[normalized_name] = []
 
-            # Оцениваем приблизительный float по wear (середина диапазона).
-            # Это позволяет max_float-фильтрам в get_price_with_float и get_listings
-            # корректно отбирать предметы нужного wear-уровня вместо игнорирования фильтра.
-            _WEAR_FLOAT_MID = {
-                'Factory New':   0.035,
-                'Minimal Wear':  0.110,
-                'Field-Tested':  0.260,
-                'Well-Worn':     0.415,
-                'Battle-Scarred': 0.725,
+            # Используем верхнюю границу wear диапазона как приблизительный float.
+            # Это важно для корректной нормализации: midpoint (0.11 для MW) на скинах
+            # с нестандартным min_float (например 0.06) даёт слишком низкую норму и
+            # приводит к неправильному определению качества выходных скинов.
+            # Верхняя граница гарантирует что нормализованное значение соответствует
+            # реальному максимально возможному float для данного wear.
+            _WEAR_FLOAT_MAX = {
+                'Factory New':   0.0699,
+                'Minimal Wear':  0.1499,
+                'Field-Tested':  0.3799,
+                'Well-Worn':     0.4499,
+                'Battle-Scarred': 0.9999,
             }
-            item_float = _WEAR_FLOAT_MID.get(wear, None)
+            item_float = _WEAR_FLOAT_MAX.get(wear, None)
 
             for _ in range(volume):
                 new_cache[normalized_name].append((price, item_float, wear, is_stattrak))
