@@ -330,6 +330,7 @@ class TargetHuntingService:
                 'last_error': None,
             })
             if self._cache[cache_mode].get('refreshing'):
+                logger.info('⚠️ Refresh already in progress for mode=%s, skipping', cache_mode)
                 return
             self._cache[cache_mode]['refreshing'] = True
 
@@ -349,7 +350,30 @@ class TargetHuntingService:
 
         try:
             start_ts = time.time()
-            logger.info('Refreshing mode=%s (calc_mode=%s)...', cache_mode, calc_mode)
+            logger.info('🔄 Refreshing mode=%s (calc_mode=%s)...', cache_mode, calc_mode)
+
+            # НОВОЕ: Принудительно обновляем кэш цен при ручном refresh
+            try:
+                pm = getattr(self, 'price_manager', None)
+                if pm is not None:
+                    logger.info('💰 Refreshing price cache...')
+                    price_refresh_start = time.time()
+                    ok = bool(pm.refresh_prices(force_refresh=True))  # Принудительное обновление
+                    price_refresh_dur = time.time() - price_refresh_start
+                    if ok:
+                        logger.info('✅ Price cache refreshed in %.1fs', price_refresh_dur)
+                        # Очищаем мемоизацию калькулятора после обновления цен
+                        calc = getattr(self, 'calculator', None)
+                        if calc is not None and hasattr(calc, 'clear_price_memoization'):
+                            try:
+                                calc.clear_price_memoization()
+                                logger.info('🧹 Calculator memoization cleared')
+                            except Exception:
+                                logger.debug('Failed to clear calculator memoization', exc_info=True)
+                    else:
+                        logger.warning('⚠️ Price cache refresh failed, using existing cache')
+            except Exception as e:
+                logger.warning('⚠️ Price cache refresh error: %s', e)
 
             try:
                 max_results = int(os.getenv('HUNT_MAX_RESULTS', '200') or 200)
@@ -357,9 +381,11 @@ class TargetHuntingService:
                 max_results = 200
 
             # Compute both normal and StatTrak before publishing to avoid UI inconsistency.
+            logger.info('🔍 Computing contracts (Normal + StatTrak)...')
             updated_no = self._compute_results_part(calc_mode=calc_mode, is_stattrak=False)
             updated_st = self._compute_results_part(calc_mode=calc_mode, is_stattrak=True)
             updated = list(updated_no) + list(updated_st)
+            logger.info('📊 Found %d contracts (Normal: %d, StatTrak: %d)', len(updated), len(updated_no), len(updated_st))
 
             # Sort/trim using the existing logic.
             if updated:
@@ -417,6 +443,7 @@ class TargetHuntingService:
                     pass
 
             if calc is not None and warm_n > 0:
+                logger.info('🔥 Warming up top %d contracts...', warm_n)
                 for r in updated[:warm_n]:
                     try:
                         _precompute_for(r)
@@ -470,9 +497,9 @@ class TargetHuntingService:
             except Exception:
                 logger.debug('Failed to start background outcomes warmup', exc_info=True)
 
-            logger.info('Refreshed mode=%s: %s items in %.1fs', cache_mode, len(updated), dur)
+            logger.info('✅ Refreshed mode=%s: %s items in %.1fs', cache_mode, len(updated), dur)
         except Exception as e:
-            logger.exception('Failed refreshing mode=%s', cache_mode)
+            logger.exception('❌ Failed refreshing mode=%s', cache_mode)
             with self._cache_lock:
                 prev = dict(self._cache.get(cache_mode) or {})
                 prev['refreshing'] = False

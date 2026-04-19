@@ -1051,6 +1051,46 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     )
 
 
+async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Принудительное обновление кэша цен и контрактов"""
+    assert update.message
+    svc = context.application.bot_data.get('svc')
+    if not svc:
+        await update.message.reply_text('❌ Service not available')
+        return
+
+    try:
+        # Отправляем сообщение о начале обновления
+        msg = await update.message.reply_text('🔄 Starting cache refresh...')
+        
+        # Запускаем обновление в фоне
+        def _refresh_all():
+            try:
+                logger.info('🔄 Manual full refresh started by user')
+                
+                # Обновляем оба режима
+                svc.refresh_mode('PROFIT')
+                svc.refresh_mode('SAFE')
+                
+                logger.info('✅ Manual full refresh completed')
+                return True
+            except Exception as e:
+                logger.error('❌ Manual full refresh failed: %s', e)
+                return False
+        
+        # Запускаем в отдельном потоке
+        result = await asyncio.to_thread(_refresh_all)
+        
+        if result:
+            await msg.edit_text('✅ Cache refresh completed successfully!')
+        else:
+            await msg.edit_text('❌ Cache refresh failed. Check logs for details.')
+            
+    except Exception as e:
+        logger.error('Failed to handle refresh command: %s', e)
+        await update.message.reply_text(f'❌ Error: {e}')
+
+
 async def cmd_hunt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert update.message
     try:
@@ -1237,8 +1277,22 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
         if kind == 'rf':
             mode = _normalize_mode(parts[1] if len(parts) >= 2 else 'PROFIT')
-            logger.info('Manual refresh requested: mode=%s', mode)
-            asyncio.create_task(asyncio.to_thread(svc.refresh_mode, mode))
+            logger.info('🔄 Manual refresh requested: mode=%s', mode)
+            
+            # Проверяем что сервис доступен
+            if svc is None:
+                logger.error('❌ Service not available for refresh')
+                await q.answer('Service not available', show_alert=True)
+                return
+            
+            # Запускаем refresh в фоне
+            try:
+                asyncio.create_task(asyncio.to_thread(svc.refresh_mode, mode))
+                await q.answer(f'🔄 Refreshing {mode} mode...', show_alert=False)
+                logger.info('✅ Refresh task started for mode=%s', mode)
+            except Exception as e:
+                logger.error('❌ Failed to start refresh task: %s', e)
+                await q.answer('Failed to start refresh', show_alert=True)
             return
     except Exception:
         logger.exception('Failed to handle callback: %s', data)
@@ -1440,6 +1494,7 @@ def main() -> None:
     app.add_handler(CommandHandler('app', cmd_app))
     app.add_handler(CommandHandler('hunt', cmd_hunt))
     app.add_handler(CommandHandler('status', cmd_status))
+    app.add_handler(CommandHandler('refresh', cmd_refresh))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), on_text_button))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_error_handler(on_error)
