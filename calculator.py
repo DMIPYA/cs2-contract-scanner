@@ -5747,7 +5747,9 @@ class ContractCalculator:
 
         output_items_by_collection: Dict[str, List[Dict]] = {}
         for collection_name, skins_count in collections_count.items():
-            output_items = self._get_possible_outputs(collection_name, input_rarity, target_wear='Factory New', is_stattrak=is_stattrak)
+            # ИСПРАВЛЕНИЕ: Не фильтруем по target_wear, получаем все возможные выходы
+            # Реальный wear будет рассчитан ниже на основе avg_norm
+            output_items = self._get_possible_outputs(collection_name, input_rarity, target_wear=None, is_stattrak=is_stattrak)
             if not output_items:
                 continue
             output_items_by_collection[collection_name] = output_items
@@ -5785,6 +5787,7 @@ class ContractCalculator:
                 if max_f <= min_f + 1e-9:
                     min_f, max_f = 0.0, 1.0
 
+                # ИСПРАВЛЕНИЕ: Правильный расчет выходного float
                 out_float = float(avg_norm) * (max_f - min_f) + min_f
                 wear = self._determine_wear_from_float(out_float)
 
