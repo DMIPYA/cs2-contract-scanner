@@ -3,45 +3,73 @@ import subprocess
 import time
 import sys
 
+BOT_RESTART_DELAY = 15   # seconds to wait before restarting bot after ConflictError
+BOT_MAX_RESTARTS = 10    # give up after this many restarts in a row
+CHECK_INTERVAL = 5
+
+
 def run():
     print("Starting Main Process (Bot + WebApp)...")
-    
-    # Render provides PORT variable
+
     port = os.environ.get("PORT", "10000")
     print(f"Server will listen on PORT: {port}")
 
-    # Set webapp host/port via env for webapp_server.py
     os.environ["WEBAPP_PORT"] = port
     os.environ["WEBAPP_HOST"] = "0.0.0.0"
 
     print("--- Launching Web App (FastAPI) ---")
-    # Using uvicorn directly if webapp_server has an 'app' object
-    # Or just run the script if it starts uvicorn internally
-    # Let's run webapp_server.py and telegram_bot.py as subprocesses
-    
     web_proc = subprocess.Popen([sys.executable, "webapp_server.py"])
-    
-    # Wait a bit for the web server to bind to the port
+
+    # Wait for web server to bind
     time.sleep(5)
-    
+
     print("--- Launching Telegram Bot ---")
     bot_proc = subprocess.Popen([sys.executable, "telegram_bot.py"])
 
+    bot_restarts = 0
+
     try:
-        # Keep the main process alive until one of them dies
         while True:
+            time.sleep(CHECK_INTERVAL)
+
+            # Web app died — nothing to do without it, exit
             if web_proc.poll() is not None:
-                print("Web App process died. Exiting...")
+                print(f"Web App process died (exit={web_proc.returncode}). Exiting.")
                 break
+
+            # Bot died — try to restart unless too many failures
             if bot_proc.poll() is not None:
-                print("Telegram Bot process died. Exiting...")
-                break
-            time.sleep(5)
+                code = bot_proc.returncode
+                bot_restarts += 1
+                print(f"Telegram Bot process died (exit={code}, restart #{bot_restarts}).")
+
+                if bot_restarts > BOT_MAX_RESTARTS:
+                    print("Too many bot restarts. Exiting.")
+                    break
+
+                # ConflictError causes sys.exit(1) — wait longer so old instance releases the token
+                delay = BOT_RESTART_DELAY if code == 1 else 5
+                print(f"Restarting bot in {delay}s...")
+                time.sleep(delay)
+
+                bot_proc = subprocess.Popen([sys.executable, "telegram_bot.py"])
+                print("Bot restarted.")
+            else:
+                # Bot is alive — reset restart counter
+                bot_restarts = 0
+
     except KeyboardInterrupt:
         print("Stopping processes...")
     finally:
-        web_proc.terminate()
-        bot_proc.terminate()
+        try:
+            web_proc.terminate()
+        except Exception:
+            pass
+        try:
+            bot_proc.terminate()
+        except Exception:
+            pass
+
 
 if __name__ == "__main__":
     run()
