@@ -5690,18 +5690,34 @@ class ContractCalculator:
         return 'Battle-Scarred'
 
     def _determine_wear_from_float(self, item_float: float) -> str:
-        wear_thresholds = [
-            ('Factory New', 0.07),
-            ('Minimal Wear', 0.15),
-            ('Field-Tested', 0.38),
-            ('Well-Worn', 0.45),
-            ('Battle-Scarred', 1.0),
-        ]
-
-        for wear_name, threshold in wear_thresholds:
-            if item_float <= threshold:
-                return wear_name
-        return 'Battle-Scarred'
+        """
+        Determine wear quality from float value.
+        
+        Wear boundaries (upper bound exclusive except for Battle-Scarred):
+        - Factory New:     [0.00, 0.07)
+        - Minimal Wear:    [0.07, 0.15)
+        - Field-Tested:    [0.15, 0.38)
+        - Well-Worn:       [0.38, 0.45)
+        - Battle-Scarred:  [0.45, 1.00]
+        
+        Args:
+            item_float: Float value in range [0.0, 1.0]
+            
+        Returns:
+            Wear quality string
+        """
+        # Use strict less-than for all boundaries except the last one
+        # This ensures 0.07 is MW (not FN), 0.15 is FT (not MW), etc.
+        if item_float < 0.07:
+            return 'Factory New'
+        elif item_float < 0.15:
+            return 'Minimal Wear'
+        elif item_float < 0.38:
+            return 'Field-Tested'
+        elif item_float < 0.45:
+            return 'Well-Worn'
+        else:
+            return 'Battle-Scarred'
 
     def calculate_contract_outcomes_details(self, contract_skins: List[Dict], is_stattrak: bool) -> List[Dict]:
         avg_norm = self._calculate_average_normalized_float(contract_skins)
