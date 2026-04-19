@@ -3170,7 +3170,7 @@ class ContractCalculator:
         roi = (net_profit / input_cost) * 100 if input_cost > 0 else 0
 
         # Align with external calculators: wear is determined by the normalized average float (f')
-        achievable_wear = self._determine_best_achievable_wear(avg_norm_float)
+        achievable_wear = self._determine_wear_from_float(avg_norm_float)
 
         return {
             'input_cost': input_cost,
