@@ -697,16 +697,17 @@ class ContractCalculator:
                                 })
                                 added_any = True
                                 break
-                        self._logger.info(
-                            'HuntDebugInputs coll=%s rarity=%s ST=%s want_nm=%s present_before=%s candidates=%s added=%s',
-                            str(collection_name),
-                            str(rarity_norm),
-                            'Y' if bool(is_stattrak) else 'N',
-                            str(os.getenv('HUNT_DEBUG_EVAL_NAME', '') or ''),
-                            'Y' if bool(has_nm) else 'N',
-                            str(candidates[:5]),
-                            'Y' if bool(added_any) else 'N',
-                        )
+                        # Убираем спам логи HuntDebugInputs
+                        # self._logger.info(
+                        #     'HuntDebugInputs coll=%s rarity=%s ST=%s want_nm=%s present_before=%s candidates=%s added=%s',
+                        #     str(collection_name),
+                        #     str(rarity_norm),
+                        #     'Y' if bool(is_stattrak) else 'N',
+                        #     str(os.getenv('HUNT_DEBUG_EVAL_NAME', '') or ''),
+                        #     'Y' if bool(has_nm) else 'N',
+                        #     str(candidates[:5]),
+                        #     'Y' if bool(added_any) else 'N',
+                        # )
         except Exception:
             pass
         return list(merged)
@@ -1166,16 +1167,18 @@ class ContractCalculator:
             collections_checked += 1
             imb = self._collection_imbalance_ratio(c, input_rarity, is_stattrak=is_stattrak)
             if dbg and str(c).strip().lower() == 'the revolution collection':
-                try:
-                    self._logger.info(
-                        'HuntDebug Revolution: rarity=%s ST=%s imb=%s min_imb=%s',
-                        str(input_rarity),
-                        'Y' if bool(is_stattrak) else 'N',
-                        str(imb),
-                        str(min_imbalance_ratio),
-                    )
-                except Exception:
-                    pass
+                # Убираем спам логи HuntDebug Revolution rarity (только при HUNT_DEBUG=1)
+                if str(os.getenv('HUNT_DEBUG', '') or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}:
+                    try:
+                        self._logger.info(
+                            'HuntDebug Revolution: rarity=%s ST=%s imb=%s min_imb=%s',
+                            str(input_rarity),
+                            'Y' if bool(is_stattrak) else 'N',
+                            str(imb),
+                            str(min_imbalance_ratio),
+                        )
+                    except Exception:
+                        pass
             if imb is not None and float(imb) + 1e-12 < float(min_imbalance_ratio):
                 continue
             collections_passed_imb += 1
@@ -1217,14 +1220,16 @@ class ContractCalculator:
                         )
                         if p_dbg and float(p_dbg) > 0:
                             prices_dbg.append(float(p_dbg))
-                    self._logger.info(
-                        'HuntDebug Revolution: best_wear=%s outs=%d priced_outs=%d outcomes_count=%d prices=%s',
-                        str(best_wear),
-                        int(len(outs or [])),
-                        int(len(prices_dbg)),
-                        int(outcomes_count),
-                        str(sorted(prices_dbg, reverse=True)[:5]),
-                    )
+                    # Убираем спам логи HuntDebug Revolution best_wear (только при HUNT_DEBUG=1)
+                    if str(os.getenv('HUNT_DEBUG', '') or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}:
+                        self._logger.info(
+                            'HuntDebug Revolution: best_wear=%s outs=%d priced_outs=%d outcomes_count=%d prices=%s',
+                            str(best_wear),
+                            int(len(outs or [])),
+                            int(len(prices_dbg)),
+                            int(outcomes_count),
+                            str(sorted(prices_dbg, reverse=True)[:5]),
+                        )
                 except Exception:
                     pass
 
@@ -1823,27 +1828,30 @@ class ContractCalculator:
                                             if abs(float(expected_output) - float(input_cost)) > float(dbg_eval_near_delta):
                                                 should_log = False
 
+                                    # Убираем спам логи HuntDebugEval (только при HUNT_DEBUG=1)
                                     if not should_log:
                                         raise RuntimeError('skip')
 
-                                    self._logger.info(
-                                        'HuntDebugEval rarity=%s ST=%s coll=%s nm=%s split=%sx%s virt=%s cost=%.3f ev=%.3f roi=%.3f pp=%.3f best=%s best_price=%.3f best_prob=%.3f avg_norm=%.4f',
-                                        str(self._normalize_rarity(input_rarity)),
-                                        'Y' if bool(is_stattrak) else 'N',
-                                        str(coll_nm),
-                                        str(base_nm),
-                                        int(target_cnt),
-                                        int(filler_cnt),
-                                        'Y' if bool(virt_used) else 'N',
-                                        float(input_cost),
-                                        float(expected_output),
-                                        float(roi),
-                                        float(pp),
-                                        str(best_nm),
-                                        float(ev.get('best_outcome_price') or 0.0),
-                                        float(ev.get('best_outcome_probability') or 0.0),
-                                        float(ev.get('average_normalized_float') or 0.0),
-                                    )
+                                    # Показываем детальные логи только при HUNT_DEBUG=1
+                                    if str(os.getenv('HUNT_DEBUG', '') or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}:
+                                        self._logger.info(
+                                            'HuntDebugEval rarity=%s ST=%s coll=%s nm=%s split=%sx%s virt=%s cost=%.3f ev=%.3f roi=%.3f pp=%.3f best=%s best_price=%.3f best_prob=%.3f avg_norm=%.4f',
+                                            str(self._normalize_rarity(input_rarity)),
+                                            'Y' if bool(is_stattrak) else 'N',
+                                            str(coll_nm),
+                                            str(base_nm),
+                                            int(target_cnt),
+                                            int(filler_cnt),
+                                            'Y' if bool(virt_used) else 'N',
+                                            float(input_cost),
+                                            float(expected_output),
+                                            float(roi),
+                                            float(pp),
+                                            str(best_nm),
+                                            float(ev.get('best_outcome_price') or 0.0),
+                                            float(ev.get('best_outcome_probability') or 0.0),
+                                            float(ev.get('average_normalized_float') or 0.0),
+                                        )
 
                                     try:
                                         in_floats = [float(s.get('float')) for s in contract if s.get('float') is not None]
@@ -1864,13 +1872,15 @@ class ContractCalculator:
                                                 f"|p={float(o.get('probability') or 0.0):.3f}"
                                             )
 
-                                        self._logger.info(
-                                            'HuntDebugEvalDetails in_float[min=%.5f max=%.5f avg=%.5f] outcomes_top=%s',
-                                            float(in_min),
-                                            float(in_max),
-                                            float(in_avg),
-                                            str(top),
-                                        )
+                                        # Убираем спам логи HuntDebugEvalDetails (только при HUNT_DEBUG=1)
+                                        if str(os.getenv('HUNT_DEBUG', '') or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}:
+                                            self._logger.info(
+                                                'HuntDebugEvalDetails in_float[min=%.5f max=%.5f avg=%.5f] outcomes_top=%s',
+                                                float(in_min),
+                                                float(in_max),
+                                                float(in_avg),
+                                                str(top),
+                                            )
                                     except Exception:
                                         pass
                                     dbg_eval_n += 1

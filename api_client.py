@@ -764,20 +764,23 @@ class MarketCSGOClient:
         if isinstance(file_data, list):
             # API возвращает прямой список лотов
             items = file_data
-            logger.debug(f"Файл содержит прямой список из {len(items)} лотов")
+            # Убираем спам логи
+            # logger.debug(f"Файл содержит прямой список из {len(items)} лотов")
         elif isinstance(file_data, dict) and 'items' in file_data:
             # API возвращает словарь с items
             items = file_data['items']
-            logger.debug(f"Файл содержит словарь с {len(items)} лотов")
+            # Убираем спам логи
+            # logger.debug(f"Файл содержит словарь с {len(items)} лотов")
         else:
             logger.warning(f"Неизвестный формат данных: {type(file_data)}")
             return 0
         
         # Отладка: выводим структуру первого элемента
-        if items and len(items) > 0:
-            first_item = items[0]
-            logger.debug(f"Структура первого лота: {type(first_item)}, длина: {len(first_item) if isinstance(first_item, list) else 'N/A'}")
-            logger.debug(f"Первый лот: {first_item}")
+        # Убираем спам логи о структуре лотов
+        # if items and len(items) > 0:
+        #     first_item = items[0]
+        #     logger.debug(f"Структура первого лота: {type(first_item)}, длина: {len(first_item) if isinstance(first_item, list) else 'N/A'}")
+        #     logger.debug(f"Первый лот: {first_item}")
         
         for item in items:
             try:
@@ -848,10 +851,12 @@ class MarketCSGOClient:
                 lots_processed += 1
                 
             except Exception as e:
-                logger.debug(f"Ошибка обработки лота: {e}")
+                # Убираем спам логи об ошибках обработки лотов
+                # logger.debug(f"Ошибка обработки лота: {e}")
                 continue
         
-        logger.debug(f"Обработано {lots_processed} лотов из файла")
+        # Убираем спам логи о количестве обработанных лотов
+        # logger.debug(f"Обработано {lots_processed} лотов из файла")
         return lots_processed
     
     def _determine_wear(self, market_hash_name: str) -> str:

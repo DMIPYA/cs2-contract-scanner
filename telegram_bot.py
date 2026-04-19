@@ -1197,10 +1197,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await loading.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
             except Exception:
                 await q.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-            try:
-                logger.info('Details render done: idx=%s mode=%s in %.2fs', str(idx), str(mode), time.time() - start)
-            except Exception:
-                pass
+    # Убираем спам логи о рендеринге деталей
+    # try:
+    #     logger.info('Details render done: idx=%s mode=%s in %.2fs', str(idx), str(mode), time.time() - start)
+    # except Exception:
+    #     pass
             return
 
         if kind == 'c':
@@ -1227,10 +1228,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await loading.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
             except Exception:
                 await q.message.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-            try:
-                logger.info('Craft render done: idx=%s mode=%s in %.2fs', str(idx), str(mode), time.time() - start)
-            except Exception:
-                pass
+    # Убираем спам логи о рендеринге craft
+    # try:
+    #     logger.info('Craft render done: idx=%s mode=%s in %.2fs', str(idx), str(mode), time.time() - start)
+    # except Exception:
+    #     pass
             return
 
         if kind == 'rf':
