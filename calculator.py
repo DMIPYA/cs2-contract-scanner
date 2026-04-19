@@ -480,13 +480,15 @@ class ContractCalculator:
             
             return (wear, max_float)
         
-        # No achievable wear found (very rare)
-        self._logger.warning(
-            'No achievable wear found for %s (preferred=%s, ST=%s)',
-            output_skin_name,
-            preferred_wear,
-            'Y' if is_stattrak else 'N'
-        )
+        # No achievable wear found (очень редко, но нормально)
+        # Убираем спам - показываем только при HUNT_DEBUG=1
+        if str(os.getenv('HUNT_DEBUG', '') or '').strip().lower() in {'1', 'true', 'yes', 'y', 'on'}:
+            self._logger.warning(
+                'No achievable wear found for %s (preferred=%s, ST=%s)',
+                output_skin_name,
+                preferred_wear,
+                'Y' if is_stattrak else 'N'
+            )
         return None
 
     def _validate_contract_outcomes(

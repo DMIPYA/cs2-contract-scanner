@@ -1369,8 +1369,24 @@ def main() -> None:
             token = (vals.get('TELEGRAM_BOT_TOKEN') or '').strip()
         except Exception:
             token = ''
-    if not token:
-        raise RuntimeError('TELEGRAM_BOT_TOKEN is not set in .env')
+    
+    # Проверяем валидность токена
+    if not token or token == 'YOUR_NEW_TOKEN_HERE':
+        logger.error('❌ TELEGRAM_BOT_TOKEN не установлен или недействителен!')
+        logger.error('📋 Инструкция по получению токена:')
+        logger.error('   1. Напишите @BotFather в Telegram')
+        logger.error('   2. Отправьте команду /newbot')
+        logger.error('   3. Следуйте инструкциям для создания бота')
+        logger.error('   4. Скопируйте полученный токен в .env файл')
+        logger.error('   5. Перезапустите бота')
+        raise RuntimeError('TELEGRAM_BOT_TOKEN is not set or invalid in .env')
+    
+    # Проверяем формат токена (должен быть вида: 123456789:ABC-DEF...)
+    if ':' not in token or len(token.split(':')) != 2:
+        logger.error('❌ TELEGRAM_BOT_TOKEN имеет неверный формат!')
+        logger.error('   Токен должен быть вида: 123456789:ABC-DEF1234ghIkl-zyx57W2v1u123ew11')
+        logger.error('   Текущий токен: %s', token[:20] + '...' if len(token) > 20 else token)
+        raise RuntimeError('TELEGRAM_BOT_TOKEN has invalid format')
 
     global _service
     _service = TargetHuntingService()
