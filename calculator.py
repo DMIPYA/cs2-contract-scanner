@@ -2115,55 +2115,24 @@ class ContractCalculator:
                                 updated_skins.append(dict(_s))
                         contract_skins = updated_skins
                     # в”Ђв”Ђ End liquidity check в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-                    # Calculate outcomes NOW вЂ” before any float/wear changes
-                    # so they reflect the original contract float values
-                    try:
-                        pre_opt_outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_st)
-                        pre_opt_outcomes = sorted(pre_opt_outcomes or [], key=lambda x: float(x.get('price') or 0.0), reverse=True)
-                    except Exception:
-                        pre_opt_outcomes = None
                     refined_inputs = self._refine_contract_inputs(contract_skins, is_stattrak=is_st)
                     if refined_inputs:
                         contract_skins = refined_inputs
-                    # в”Ђв”Ђ Float optimization (pushing to the edge of quality) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+                    # Wear/skin optimization (market cache only)
                     try:
-                        optimize_floats = str(os.getenv('HUNT_OPTIMIZE_FLOATS', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
-                        if optimize_floats:
-                            target_wear = str(r.get('hunt_target_wear') or 'Factory New')
-                            # Wear-level optimization (no CSFloat needed)
-                            wear_optimized = self._optimize_contract_wear_distribution(
-                                contract_skins, target_wear=target_wear, is_stattrak=is_st
+                        _opt_enabled = str(os.getenv('HUNT_OPTIMIZE_FLOATS', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
+                        if _opt_enabled:
+                            _tw = str(r.get('hunt_target_wear') or 'Factory New')
+                            _wear_opt = self._optimize_contract_wear_distribution(
+                                contract_skins, target_wear=_tw, is_stattrak=is_st
                             )
-                            if wear_optimized:
-                                contract_skins = wear_optimized
-                            # Float-level optimization (CSFloat required)
-                            optimized_skins = self._optimize_contract_floats(contract_skins, target_wear=target_wear, is_stattrak=is_st)
-                            if optimized_skins:
-                                contract_skins = optimized_skins
+                            if _wear_opt:
+                                contract_skins = _wear_opt
+                            _float_opt = self._optimize_contract_floats(contract_skins, target_wear=_tw, is_stattrak=is_st)
+                            if _float_opt:
+                                contract_skins = _float_opt
                     except Exception:
                         pass
-                    # в”Ђв”Ђ End float optimization в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-                    # в”Ђв”Ђ FN Liquidity validation в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-                    # Uses CACHED data only - no API calls, very fast!
-                    try:
-                        fn_liquidity_check = str(os.getenv('HUNT_FN_LIQUIDITY_CHECK', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
-                        if fn_liquidity_check:
-                            if not self._validate_fn_contract_liquidity(contract_skins, is_stattrak=is_st):
-                                # Contract failed FN liquidity check, skip it
-                                continue
-                    except Exception:
-                        # Don't block on errors
-                        pass
-                    # в”Ђв”Ђ End FN liquidity validation в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-                    cd = self._calculate_contract_profit(contract_skins, target_collection, is_st)
-                    out = dict(r)
-                    out['input_skins'] = contract_skins
-                    out.update(cd)
-                    # Override outcomes with pre-optimization values вЂ” float optimization
-                    # changes input floats to cheaper lots but must not affect output quality
-                    if pre_opt_outcomes:
-                        out['outcomes'] = pre_opt_outcomes
-                    if liquidity_depth is not None:
                         out['liquidity_depth'] = int(liquidity_depth)
                     refined.append(out)
                 except Exception:
