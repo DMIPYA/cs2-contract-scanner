@@ -2123,16 +2123,40 @@ class ContractCalculator:
                         _opt_enabled = str(os.getenv('HUNT_OPTIMIZE_FLOATS', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
                         if _opt_enabled:
                             _tw = str(r.get('hunt_target_wear') or 'Factory New')
+                            _orig_cost = sum(float(s.get('price') or 0.0) for s in contract_skins)
                             _wear_opt = self._optimize_contract_wear_distribution(
                                 contract_skins, target_wear=_tw, is_stattrak=is_st
                             )
                             if _wear_opt:
+                                _new_cost = sum(float(s.get('price') or 0.0) for s in _wear_opt)
+                                self._logger.info(
+                                    'WearOpt: %s target=%s orig=%.2f new=%.2f saving=%.2f',
+                                    str(r.get('hunt_output') or ''), _tw, _orig_cost, _new_cost, _orig_cost - _new_cost
+                                )
                                 contract_skins = _wear_opt
+                            else:
+                                self._logger.info(
+                                    'WearOpt: %s target=%s no improvement (orig=%.2f)',
+                                    str(r.get('hunt_output') or ''), _tw, _orig_cost
+                                )
                             _float_opt = self._optimize_contract_floats(contract_skins, target_wear=_tw, is_stattrak=is_st)
                             if _float_opt:
                                 contract_skins = _float_opt
                     except Exception:
+                        self._logger.debug('WearOpt failed', exc_info=True)
+                    # FN Liquidity validation (cached data only)
+                    try:
+                        fn_liquidity_check = str(os.getenv('HUNT_FN_LIQUIDITY_CHECK', '1') or '').strip().lower() not in {'0', 'false', 'no', 'off'}
+                        if fn_liquidity_check:
+                            if not self._validate_fn_contract_liquidity(contract_skins, is_stattrak=is_st):
+                                continue
+                    except Exception:
                         pass
+                    cd = self._calculate_contract_profit(contract_skins, target_collection, is_st)
+                    out = dict(r)
+                    out['input_skins'] = contract_skins
+                    out.update(cd)
+                    if liquidity_depth is not None:
                         out['liquidity_depth'] = int(liquidity_depth)
                     refined.append(out)
                 except Exception:
@@ -2296,12 +2320,12 @@ class ContractCalculator:
         is_stattrak,
     ):
         """
-        Optimizes contract inputs by mixing wear levels AND skin choices within each
-        slot's collection. Picks the cheapest combination that satisfies the avg_norm
-        constraint for the target skin's quality.
+        Optimizes contract inputs by trying different wear levels for each input skin
+        (same skin, different quality) to reduce total cost while keeping avg_norm
+        within the constraint for the target skin's quality.
 
-        For FN/MW/FT/WW: avg_norm must stay BELOW the upper boundary (don't exceed).
-        For BS: avg_norm must stay ABOVE the lower boundary (must reach BS range).
+        For FN/MW/FT/WW: avg_norm must stay BELOW the upper boundary.
+        For BS: avg_norm must stay ABOVE the lower boundary.
 
         Uses market cache only (no CSFloat).
         """
@@ -2316,20 +2340,14 @@ class ContractCalculator:
             'Battle-Scarred': 0.9999,
         }
         WEAR_LOWER = {
-            'Factory New':    0.0,
-            'Minimal Wear':   0.07,
-            'Field-Tested':   0.15,
-            'Well-Worn':      0.38,
             'Battle-Scarred': 0.45,
         }
         wear_order = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
 
         is_bs_target = (target_wear == 'Battle-Scarred')
 
-        # For non-BS: avg_norm <= target_max_avg_norm (stay below upper boundary)
-        # For BS: avg_norm >= target_min_avg_norm (must reach lower boundary of BS)
         target_max_avg_norm = WEAR_UPPER.get(target_wear, 0.38)
-        target_min_avg_norm = 0.0  # only used for BS
+        target_min_avg_norm = 0.0
 
         try:
             outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)
@@ -2343,7 +2361,6 @@ class ContractCalculator:
                     if denom <= 1e-9:
                         continue
                     if is_bs_target:
-                        # Need avg_norm >= (lower_bs_boundary - min_f) / denom
                         min_norm = (WEAR_LOWER['Battle-Scarred'] - min_f) / denom
                         min_norm = max(0.0, min(1.0, min_norm))
                         if min_norm > target_min_avg_norm:
@@ -2357,7 +2374,6 @@ class ContractCalculator:
             pass
 
         if is_bs_target:
-            # Add small margin to ensure we're solidly in BS range
             target_min_avg_norm = min(1.0, target_min_avg_norm * 1.002)
             norm_budget_min = target_min_avg_norm * 10.0
         else:
@@ -2366,57 +2382,54 @@ class ContractCalculator:
 
         pm = self.price_manager
 
-        # Build candidate options per slot:
-        # all skins of same rarity in same collection x all wear levels
+        # Build candidate options per slot: same skin, all available wear levels
         slot_options = []
 
         for s in contract_skins:
-            collection = str(s.get('collection') or '')
-            rarity = str(s.get('rarity') or '')
-            if not collection or not rarity:
+            skin_name = str(s.get('name') or '')
+            if not skin_name:
                 return None
 
-            collection_skins = self.database.get_collection_skins(collection)
-            rarity_norm = self._normalize_rarity(rarity)
+            skin_data = self.database.get_skin_by_name(skin_name)
+            if not skin_data:
+                return None
+
+            min_f = float(skin_data.min_float)
+            max_f = float(skin_data.max_float)
+            denom = max_f - min_f
+            if denom <= 1e-9:
+                return None
+
+            available_wears = list(getattr(skin_data, 'wears', None) or [])
             options = []  # (price, norm, skin_name, wear, max_float_for_wear)
 
-            for skin in collection_skins:
-                if self._normalize_rarity(skin.rarity) != rarity_norm:
+            for w in wear_order:
+                if available_wears and w not in available_wears:
                     continue
-                min_f = float(skin.min_float)
-                max_f = float(skin.max_float)
-                denom = max_f - min_f
-                if denom <= 1e-9:
+                upper = WEAR_UPPER[w]
+                w_idx = wear_order.index(w)
+                lower_bound = 0.0 if w_idx == 0 else WEAR_UPPER[wear_order[w_idx - 1]]
+                if lower_bound >= max_f or upper < min_f:
                     continue
-                available_wears = list(getattr(skin, 'wears', None) or [])
-
-                for w in wear_order:
-                    if available_wears and w not in available_wears:
+                max_float_for_wear = min(upper, max_f)
+                norm = max(0.0, min(1.0, (max_float_for_wear - min_f) / denom))
+                try:
+                    lots = pm.market_client.get_listings(
+                        skin_name,
+                        target_wear=w,
+                        exclude_stattrak=not bool(is_stattrak),
+                        require_stattrak=bool(is_stattrak),
+                        allow_refresh=False,
+                        limit=3,
+                    )
+                    if not lots:
                         continue
-                    upper = WEAR_UPPER[w]
-                    w_idx = wear_order.index(w)
-                    lower_bound = 0.0 if w_idx == 0 else WEAR_UPPER[wear_order[w_idx - 1]]
-                    if lower_bound >= max_f or upper < min_f:
+                    price = float(lots[0][0])
+                    if price <= 0:
                         continue
-                    max_float_for_wear = min(upper, max_f)
-                    norm = max(0.0, min(1.0, (max_float_for_wear - min_f) / denom))
-                    try:
-                        lots = pm.market_client.get_listings(
-                            skin.name,
-                            target_wear=w,
-                            exclude_stattrak=not bool(is_stattrak),
-                            require_stattrak=bool(is_stattrak),
-                            allow_refresh=False,
-                            limit=3,
-                        )
-                        if not lots:
-                            continue
-                        price = float(lots[0][0])
-                        if price <= 0:
-                            continue
-                    except Exception:
-                        continue
-                    options.append((price, norm, skin.name, w, max_float_for_wear))
+                except Exception:
+                    continue
+                options.append((price, norm, skin_name, w, max_float_for_wear))
 
             if not options:
                 return None
@@ -2429,17 +2442,14 @@ class ContractCalculator:
             opts.sort(key=lambda x: x[0])
 
         if is_bs_target:
-            # For BS: need avg_norm >= target_min_avg_norm
-            # Start with cheapest options, then upgrade (raise norm) until constraint met
+            # Need avg_norm >= target_min_avg_norm
+            # Start with cheapest, raise norm until constraint met
             assigned = [opts[0] for opts in slot_options]
             assigned_norm_total = sum(o[1] for o in assigned)
 
-            # Raise norm on cheapest-to-upgrade slots until we meet the minimum
             for _ in range(50):
                 if assigned_norm_total >= norm_budget_min - 1e-4:
                     break
-                deficit = norm_budget_min - assigned_norm_total
-                # Find the slot where raising norm costs least per unit
                 best_eff = float('inf')
                 best_idx = None
                 best_opt = None
@@ -2450,14 +2460,14 @@ class ContractCalculator:
                         if norm <= curr_norm + 1e-6:
                             continue
                         norm_gain = norm - curr_norm
-                        cost_increase = price - curr_price
-                        if cost_increase < 0:
-                            # Free norm gain (cheaper AND higher norm) — take immediately
+                        cost_delta = price - curr_price
+                        if cost_delta < 0:
+                            # Free norm gain — take immediately
                             best_eff = -1.0
                             best_idx = i
                             best_opt = opt
                             break
-                        eff = cost_increase / norm_gain  # cost per unit of norm gained
+                        eff = cost_delta / norm_gain
                         if eff < best_eff:
                             best_eff = eff
                             best_idx = i
@@ -2469,13 +2479,12 @@ class ContractCalculator:
                 assigned_norm_total += best_opt[1] - assigned[best_idx][1]
                 assigned[best_idx] = best_opt
 
-            # Verify constraint is met
             if assigned_norm_total < norm_budget_min - 1e-4:
-                return None  # Can't reach BS range with available options
+                return None
 
         else:
-            # For FN/MW/FT/WW: need avg_norm <= target_max_avg_norm
-            # Start with cheapest, then upgrade to dirtier/cheaper within budget
+            # Need avg_norm <= norm_budget_max
+            # Start with cheapest, upgrade to dirtier/cheaper within budget
             assigned = [opts[0] for opts in slot_options]
             assigned_norm_total = sum(o[1] for o in assigned)
 
