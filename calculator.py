@@ -2033,7 +2033,7 @@ class ContractCalculator:
                         craftability = self._check_contract_craftability(
                             contract_skins,
                             is_stattrak=is_st,
-                            allow_unknown_float=False,
+                            allow_unknown_float=True,
                             allow_refresh=False,
                         )
                         if not bool(craftability.get('craftable')):
@@ -2328,10 +2328,13 @@ class ContractCalculator:
     ):
         """
         Optimizes contract inputs by mixing wear levels AND skin choices within each
-        slot's collection. For each slot, considers all skins of the same rarity from
-        the same collection and all available wear levels — picks the cheapest
-        combination that keeps avg_norm <= target_max_avg_norm (guaranteeing the
-        target skin's quality). Uses market cache only (no CSFloat).
+        slot's collection. Picks the cheapest combination that satisfies the avg_norm
+        constraint for the target skin's quality.
+
+        For FN/MW/FT/WW: avg_norm must stay BELOW the upper boundary (don't exceed).
+        For BS: avg_norm must stay ABOVE the lower boundary (must reach BS range).
+
+        Uses market cache only (no CSFloat).
         """
         if not contract_skins or len(contract_skins) != 10:
             return None
@@ -2343,10 +2346,22 @@ class ContractCalculator:
             'Well-Worn':      0.4499,
             'Battle-Scarred': 0.9999,
         }
+        WEAR_LOWER = {
+            'Factory New':    0.0,
+            'Minimal Wear':   0.07,
+            'Field-Tested':   0.15,
+            'Well-Worn':      0.38,
+            'Battle-Scarred': 0.45,
+        }
         wear_order = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
 
-        # Determine target_max_avg_norm from the target skin constraint only
+        is_bs_target = (target_wear == 'Battle-Scarred')
+
+        # For non-BS: avg_norm <= target_max_avg_norm (stay below upper boundary)
+        # For BS: avg_norm >= target_min_avg_norm (must reach lower boundary of BS)
         target_max_avg_norm = WEAR_UPPER.get(target_wear, 0.38)
+        target_min_avg_norm = 0.0  # only used for BS
+
         try:
             outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)
             if outcomes:
@@ -2356,15 +2371,29 @@ class ContractCalculator:
                     min_f = float(o.get('min_float', 0.0))
                     max_f = float(o.get('max_float', 1.0))
                     denom = max_f - min_f
-                    if denom > 1e-9:
+                    if denom <= 1e-9:
+                        continue
+                    if is_bs_target:
+                        # Need avg_norm >= (lower_bs_boundary - min_f) / denom
+                        min_norm = (WEAR_LOWER['Battle-Scarred'] - min_f) / denom
+                        min_norm = max(0.0, min(1.0, min_norm))
+                        if min_norm > target_min_avg_norm:
+                            target_min_avg_norm = min_norm
+                    else:
                         max_norm = (WEAR_UPPER[target_wear] - min_f) / denom
+                        max_norm = max(0.0, min(1.0, max_norm))
                         if max_norm < target_max_avg_norm:
                             target_max_avg_norm = max_norm
         except Exception:
             pass
 
-        target_max_avg_norm = max(0.0, target_max_avg_norm * 0.998)
-        norm_budget = target_max_avg_norm * 10.0
+        if is_bs_target:
+            # Add small margin to ensure we're solidly in BS range
+            target_min_avg_norm = min(1.0, target_min_avg_norm * 1.002)
+            norm_budget_min = target_min_avg_norm * 10.0
+        else:
+            target_max_avg_norm = max(0.0, target_max_avg_norm * 0.998)
+            norm_budget_max = target_max_avg_norm * 10.0
 
         pm = self.price_manager
 
@@ -2430,52 +2459,97 @@ class ContractCalculator:
         for opts in slot_options:
             opts.sort(key=lambda x: x[0])
 
-        # Initial assignment: cheapest option per slot
-        assigned = [opts[0] for opts in slot_options]
-        assigned_norm_total = sum(o[1] for o in assigned)
-
-        # If cheapest options exceed budget, tighten to per-slot budget
-        if assigned_norm_total > norm_budget + 1e-4:
-            per_slot_budget = norm_budget / 10.0
-            new_assigned = []
-            for opts in slot_options:
-                candidates = [o for o in opts if o[1] <= per_slot_budget + 1e-6]
-                if candidates:
-                    new_assigned.append(min(candidates, key=lambda x: x[0]))
-                else:
-                    new_assigned.append(min(opts, key=lambda x: x[1]))
-            assigned = new_assigned
+        if is_bs_target:
+            # For BS: need avg_norm >= target_min_avg_norm
+            # Start with cheapest options, then upgrade (raise norm) until constraint met
+            assigned = [opts[0] for opts in slot_options]
             assigned_norm_total = sum(o[1] for o in assigned)
 
-        # Greedy: upgrade slots to dirtier/cheaper options while staying within budget
-        for _ in range(50):
-            remaining_norm = norm_budget - assigned_norm_total
-            if remaining_norm < 1e-4:
-                break
-            best_gain = 0.0
-            best_idx = None
-            best_opt = None
-            for i, opts in enumerate(slot_options):
-                curr_price, curr_norm = assigned[i][0], assigned[i][1]
-                for opt in opts:
-                    price, norm = opt[0], opt[1]
-                    if norm <= curr_norm + 1e-6:
-                        continue
-                    norm_delta = norm - curr_norm
-                    if norm_delta > remaining_norm + 1e-6:
-                        continue
-                    gain = curr_price - price
-                    if gain <= 1e-4:
-                        continue
-                    eff = gain / norm_delta
-                    if eff > best_gain:
-                        best_gain = eff
-                        best_idx = i
-                        best_opt = opt
-            if best_idx is None:
-                break
-            assigned_norm_total += best_opt[1] - assigned[best_idx][1]
-            assigned[best_idx] = best_opt
+            # Raise norm on cheapest-to-upgrade slots until we meet the minimum
+            for _ in range(50):
+                if assigned_norm_total >= norm_budget_min - 1e-4:
+                    break
+                deficit = norm_budget_min - assigned_norm_total
+                # Find the slot where raising norm costs least per unit
+                best_eff = float('inf')
+                best_idx = None
+                best_opt = None
+                for i, opts in enumerate(slot_options):
+                    curr_price, curr_norm = assigned[i][0], assigned[i][1]
+                    for opt in opts:
+                        price, norm = opt[0], opt[1]
+                        if norm <= curr_norm + 1e-6:
+                            continue
+                        norm_gain = norm - curr_norm
+                        cost_increase = price - curr_price
+                        if cost_increase < 0:
+                            # Free norm gain (cheaper AND higher norm) — take immediately
+                            best_eff = -1.0
+                            best_idx = i
+                            best_opt = opt
+                            break
+                        eff = cost_increase / norm_gain  # cost per unit of norm gained
+                        if eff < best_eff:
+                            best_eff = eff
+                            best_idx = i
+                            best_opt = opt
+                    if best_eff == -1.0:
+                        break
+                if best_idx is None:
+                    break
+                assigned_norm_total += best_opt[1] - assigned[best_idx][1]
+                assigned[best_idx] = best_opt
+
+            # Verify constraint is met
+            if assigned_norm_total < norm_budget_min - 1e-4:
+                return None  # Can't reach BS range with available options
+
+        else:
+            # For FN/MW/FT/WW: need avg_norm <= target_max_avg_norm
+            # Start with cheapest, then upgrade to dirtier/cheaper within budget
+            assigned = [opts[0] for opts in slot_options]
+            assigned_norm_total = sum(o[1] for o in assigned)
+
+            if assigned_norm_total > norm_budget_max + 1e-4:
+                per_slot_budget = norm_budget_max / 10.0
+                new_assigned = []
+                for opts in slot_options:
+                    candidates = [o for o in opts if o[1] <= per_slot_budget + 1e-6]
+                    if candidates:
+                        new_assigned.append(min(candidates, key=lambda x: x[0]))
+                    else:
+                        new_assigned.append(min(opts, key=lambda x: x[1]))
+                assigned = new_assigned
+                assigned_norm_total = sum(o[1] for o in assigned)
+
+            for _ in range(50):
+                remaining_norm = norm_budget_max - assigned_norm_total
+                if remaining_norm < 1e-4:
+                    break
+                best_gain = 0.0
+                best_idx = None
+                best_opt = None
+                for i, opts in enumerate(slot_options):
+                    curr_price, curr_norm = assigned[i][0], assigned[i][1]
+                    for opt in opts:
+                        price, norm = opt[0], opt[1]
+                        if norm <= curr_norm + 1e-6:
+                            continue
+                        norm_delta = norm - curr_norm
+                        if norm_delta > remaining_norm + 1e-6:
+                            continue
+                        gain = curr_price - price
+                        if gain <= 1e-4:
+                            continue
+                        eff = gain / norm_delta
+                        if eff > best_gain:
+                            best_gain = eff
+                            best_idx = i
+                            best_opt = opt
+                if best_idx is None:
+                    break
+                assigned_norm_total += best_opt[1] - assigned[best_idx][1]
+                assigned[best_idx] = best_opt
 
         original_total = sum(float(s.get('price') or 0.0) for s in contract_skins)
         new_total = sum(o[0] for o in assigned)
@@ -2493,8 +2567,12 @@ class ContractCalculator:
             result.append(s2)
 
         final_avg_norm = self._calculate_average_normalized_float(result)
-        if final_avg_norm > target_max_avg_norm + 1e-4:
-            return None
+        if is_bs_target:
+            if final_avg_norm < target_min_avg_norm - 1e-4:
+                return None
+        else:
+            if final_avg_norm > target_max_avg_norm + 1e-4:
+                return None
         return result
 
     def _optimize_contract_floats(self, contract_skins: List[Dict], *, target_wear: str, is_stattrak: bool) -> Optional[List[Dict]]:
