@@ -1196,23 +1196,33 @@ document.querySelectorAll('.mode-btn').forEach(btn => {
 // Refresh button
 document.getElementById('refresh-btn').addEventListener('click', async () => {
   haptic('medium');
-  showToast('Refreshing prices & contracts...');
-  
+  showToast('Refreshing...');
+
   try {
-    // Call backend refresh endpoint to force price cache update
     const r = await fetch(`${BASE_URL}/api/refresh`, { method: 'POST' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    
-    // Wait a moment for refresh to start
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Reload contracts
-    loadContracts(false);
-    showToast('Refresh complete');
+
+    // Poll until refreshing=false (server is done)
+    let attempts = 0;
+    const poll = async () => {
+      attempts++;
+      const data = await fetchContracts(state.mode).catch(() => null);
+      if (!data) return;
+      if (data.refreshing && attempts < 60) {
+        setTimeout(poll, 3000);
+        return;
+      }
+      state.contracts = data.contracts || [];
+      state.cacheAge = data.cache_age_min;
+      state.loading = false;
+      renderStats();
+      applyFilter();
+      showToast('Refresh complete');
+    };
+    setTimeout(poll, 3000);
   } catch (err) {
     console.error('Refresh error:', err);
     showToast('Refresh failed');
-    // Still try to reload contracts
     loadContracts(false);
   }
 });

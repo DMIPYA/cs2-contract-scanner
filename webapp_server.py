@@ -422,6 +422,8 @@ async def api_contracts(
 
     ts = float(meta.get('timestamp') or 0.0)
     age_min = round((time.time() - ts) / 60.0, 1) if ts > 0 else None
+    from datetime import datetime
+    last_updated = datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S') if ts > 0 else None
 
     return {
         'ready': True,
@@ -430,6 +432,8 @@ async def api_contracts(
         'total': total,
         'mode': mode,
         'cache_age_min': age_min,
+        'last_updated': last_updated,
+        'timestamp': ts,
     }
 
 
@@ -497,25 +501,7 @@ async def api_refresh() -> dict:
     try:
         svc = _get_svc()
         logger.info('Mini App: Force refresh requested')
-
-        # Force price cache refresh via price_manager
-        pm = getattr(svc, 'price_manager', None)
-        if pm is not None:
-            logger.info('Mini App: Refreshing price cache...')
-            ok = pm.refresh_prices(force_refresh=True)
-            if ok:
-                logger.info('Mini App: Price cache refreshed')
-                calc = getattr(svc, 'calculator', None)
-                if calc is not None and hasattr(calc, 'clear_price_memoization'):
-                    calc.clear_price_memoization()
-                    logger.info('Mini App: Calculator memoization cleared')
-            else:
-                logger.warning('Mini App: Price cache refresh failed')
-
-        # Trigger background contract hunt refresh
-        logger.info('Mini App: Triggering contract hunt refresh...')
         svc.refresh_background()
-
         return {'ok': True, 'message': 'Refresh started'}
     except Exception as e:
         logger.exception('Mini App refresh failed')

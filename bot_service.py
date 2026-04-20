@@ -478,6 +478,8 @@ class TargetHuntingService:
                 logger.debug('Failed to start background outcomes warmup', exc_info=True)
 
             logger.info('Refreshed mode=%s: %s items in %.1fs', cache_mode, len(updated), dur)
+            from datetime import datetime
+            logger.info('Last update: %s', datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
         except Exception as e:
             logger.exception('Failed refreshing mode=%s', cache_mode)
             with self._cache_lock:
