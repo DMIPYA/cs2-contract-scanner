@@ -3,7 +3,7 @@ import subprocess
 import time
 import sys
 
-BOT_RESTART_DELAY = 15   # seconds to wait before restarting bot after ConflictError
+BOT_RESTART_DELAY = 30   # seconds to wait before restarting bot after ConflictError
 BOT_MAX_RESTARTS = 10    # give up after this many restarts in a row
 CHECK_INTERVAL = 5
 
@@ -24,6 +24,24 @@ def run():
     time.sleep(5)
 
     print("--- Launching Telegram Bot ---")
+    bot_enabled = os.environ.get("BOT_ENABLED", "1").strip() not in {"0", "false", "no", "off"}
+    if not bot_enabled:
+        print("Telegram Bot is disabled (BOT_ENABLED=0). Only WebApp is running.")
+        try:
+            while True:
+                if web_proc.poll() is not None:
+                    print("Web App process died. Exiting...")
+                    break
+                time.sleep(5)
+        except KeyboardInterrupt:
+            print("Stopping processes...")
+        finally:
+            try:
+                web_proc.terminate()
+            except Exception:
+                pass
+        return
+
     bot_proc = subprocess.Popen([sys.executable, "telegram_bot.py"])
 
     bot_restarts = 0
