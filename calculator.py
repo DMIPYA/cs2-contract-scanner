@@ -1845,6 +1845,24 @@ class ContractCalculator:
                 )
             except Exception:
                 pass
+        # Always log a compact funnel summary so we can diagnose low-result issues
+        try:
+            for rs in dbg_summary:
+                logging.getLogger().info(
+                    'HuntFunnel ST=%s rarity=%s targets=%s w_inputs=%s built=%s craftable=%s ev_ok=%s roi_ok=%s pp_ok=%s selected=%s',
+                    'Y' if bool(is_stattrak) else 'N',
+                    str(rs.get('rarity') or ''),
+                    int(rs.get('ranked_targets') or 0),
+                    int(rs.get('targets_with_inputs') or 0),
+                    int(rs.get('contracts_built') or 0),
+                    int(rs.get('contracts_craftable') or 0),
+                    int(rs.get('contracts_ev_ok') or 0),
+                    int(rs.get('contracts_roi_ok') or 0),
+                    int(rs.get('contracts_pp_ok') or 0),
+                    int(rs.get('contracts_selected') or 0),
+                )
+        except Exception:
+            pass
         # de-duplicate by target skin (most expensive outcome). Keep the best opportunity per skin.
         # For SAFE mode, include wear in the key so PP=100% at different wears both survive.
         uniq: Dict[Tuple, Dict] = {}
@@ -3768,6 +3786,14 @@ class ContractCalculator:
             self._memo_collection_avg_outcome_price.clear()
             self._memo_collection_score.clear()
             self._memo_collection_imbalance.clear()
+            # Also clear target ranking and skin selection caches —
+            # these depend on prices and must be invalidated after a price refresh.
+            self._memo_target_rank.clear()
+            self._memo_main_skins.clear()
+            self._memo_next_grade_count.clear()
+            self._memo_possible_outputs.clear()
+            self._memo_contract_target_prob.clear()
+            self._memo_contract_max_output.clear()
 
     def _normalize_rarity(self, rarity_name: Optional[str]) -> Optional[str]:
 
