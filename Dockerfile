@@ -22,4 +22,5 @@ ENV WEBAPP_PORT=7860
 EXPOSE 7860
 
 # Run both the bot and the web app using our runner
+# v2
 CMD ["python", "render_runner.py"]
