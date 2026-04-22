@@ -2,6 +2,14 @@ import os
 import subprocess
 import time
 import sys
+from pathlib import Path
+
+# Load .env before checking any env vars
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().with_name('.env'), override=False)
+except Exception:
+    pass
 
 BOT_RESTART_DELAY = 30   # seconds to wait before restarting bot after ConflictError
 BOT_MAX_RESTARTS = 10    # give up after this many restarts in a row
