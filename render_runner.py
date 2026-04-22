@@ -42,6 +42,22 @@ def run():
                 pass
         return
 
+    # Check Telegram API reachability before starting bot
+    import urllib.request
+    telegram_ok = False
+    for attempt in range(3):
+        try:
+            urllib.request.urlopen("https://api.telegram.org", timeout=10)
+            telegram_ok = True
+            print(f"Telegram API reachable (attempt {attempt+1})")
+            break
+        except Exception as e:
+            print(f"Telegram API check attempt {attempt+1} failed: {e}")
+            time.sleep(5)
+
+    if not telegram_ok:
+        print("WARNING: Telegram API unreachable. Bot may fail to start.")
+
     bot_proc = subprocess.Popen([sys.executable, "telegram_bot.py"])
 
     bot_restarts = 0
