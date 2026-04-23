@@ -579,6 +579,7 @@ class TargetHuntingService:
                         for m in to_refresh:
                             if self._stop.is_set():
                                 break
+                            logger.info('Refresher: starting mode=%s', m)
                             self.refresh_mode(m)
                     finally:
                         self._refresh_running.clear()

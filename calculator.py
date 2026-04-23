@@ -1316,8 +1316,7 @@ class ContractCalculator:
                 prof_totals['rank_targets_s'] += float(time.perf_counter() - _t0)
             rarity_stats['ranked_targets'] = int(len(ranked_targets or []))
             if not ranked_targets:
-                if dbg:
-                    dbg_summary.append(rarity_stats)
+                dbg_summary.append(rarity_stats)
                 continue
             # SAFE mode: augment targets with ALL wears per collection.
             # The default best_wear maximises average ROI, but PP=100% may exist at a
@@ -1810,8 +1809,7 @@ class ContractCalculator:
                 if best_item is not None:
                     results.append(best_item)
                     rarity_stats['contracts_selected'] = int(rarity_stats.get('contracts_selected') or 0) + 1
-            if dbg:
-                dbg_summary.append(rarity_stats)
+            dbg_summary.append(rarity_stats)
         if prof:
             try:
                 dur = float(time.perf_counter() - prof_total_start)
