@@ -75,6 +75,14 @@ app.add_middleware(
 )
 
 
+@app.on_event('startup')
+async def startup_event():
+    """Initialize service eagerly on startup so refresh begins immediately."""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _get_svc)
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 _WEAR_ABBR = {
