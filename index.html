@@ -372,6 +372,7 @@ body {
   padding: 6px 0; border-bottom: 1px solid var(--surface2);
 }
 .input-item:last-child { border-bottom: none; }
+.input-item:active { opacity: .8; }
 .input-idx { font-size: 10px; color: var(--text4); letter-spacing: 1px; width: 34px; flex-shrink: 0; }
 .input-info { flex: 1; min-width: 0; }
 .input-name {
@@ -390,6 +391,7 @@ body {
   padding: 6px 0; border-bottom: 1px solid var(--surface2);
 }
 .outcome-item:last-child { border-bottom: none; }
+.outcome-item:active { opacity: .8; }
 .outcome-left { flex: 1; min-width: 0; }
 .outcome-name {
   font-family: 'Barlow Condensed', sans-serif;
@@ -1119,7 +1121,7 @@ function renderDetailFull(c) {
         ? `${escHtml(g.wear)} · max ${maxF.toFixed(4)}`
         : escHtml(g.wear);
       return `
-<div class="input-item" data-gidx="${gIdx}">
+<a class="input-item" data-gidx="${gIdx}" href="${marketUrl(g.name, g.wear, c.is_stattrak)}" target="_blank" rel="noopener" style="text-decoration:none">
   <div class="input-idx">${rangeLabel}</div>
   <div class="input-info">
     <div class="input-name">${escHtml(g.name)}</div>
@@ -1129,7 +1131,7 @@ function renderDetailFull(c) {
     <div class="input-price">$${fmt$(g.total_price)}</div>
     ${perItemTxt ? `<div class="input-float">${perItemTxt}</div>` : ''}
   </div>
-</div>`;
+</a>`;
     }).join('');
   }
 
@@ -1146,7 +1148,7 @@ function renderDetailFull(c) {
     outcomesList.innerHTML = outcomes.map(o => {
       const prob = parseFloat(o.probability) || 0;
       return `
-<div class="outcome-item">
+<a class="outcome-item" href="${marketUrl(o.name, o.wear, c.is_stattrak)}" target="_blank" rel="noopener" style="text-decoration:none">
   <div class="outcome-left">
     <div class="outcome-name">${escHtml(o.name)}</div>
     <div class="outcome-prob">${prob.toFixed(2)}% chance · ${escHtml(o.wear)}</div>
@@ -1155,7 +1157,7 @@ function renderDetailFull(c) {
     <div class="outcome-price">$${fmt$(o.price)}</div>
     <span class="wear-tag ${o.wear_abbr}">${o.wear_abbr}</span>
   </div>
-</div>`;
+</a>`;
     }).join('');
   }
 }
@@ -1164,8 +1166,30 @@ function renderDetailFull(c) {
 // EVENTS — FILTERS, MODE, REFRESH
 // ════════════════════════════════════════════════════════════════════════════
 
-function escHtml(s) {
+function marketUrl(name, wear, isStattrak) {
+  const prefix = isStattrak ? 'StatTrak™ ' : '';
+  const query = encodeURIComponent(`${prefix}${name} (${wear})`);
+  return `https://market.csgo.com/en/?search=${query}`;
+}
+
+
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function marketUrl(name, wear, isStattrak) {
+  const prefix = isStattrak ? 'StatTrak™ ' : '';
+  const query = `${prefix}${name} (${wear})`;
+  return `https://market.csgo.com/en/?search=${encodeURIComponent(query)}`;
+}
+
+function openMarket(name, wear, isStattrak) {
+  haptic('light');
+  const url = marketUrl(name, wear, isStattrak);
+  if (tg && tg.openLink) {
+    tg.openLink(url);
+  } else {
+    window.open(url, '_blank');
+  }
 }
 
 // Filter chips
