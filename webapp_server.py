@@ -65,7 +65,16 @@ def _get_db() -> Optional[CS2Database]:
 
 # ── FastAPI app ──────────────────────────────────────────────────────────────
 
-app = FastAPI(title='Crafty Mini App', docs_url=None, redoc_url=None)
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, _get_svc)
+    yield
+
+app = FastAPI(title='Crafty Mini App', docs_url=None, redoc_url=None, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -73,14 +82,6 @@ app.add_middleware(
     allow_methods=['GET'],
     allow_headers=['*'],
 )
-
-
-@app.on_event('startup')
-async def startup_event():
-    """Initialize service eagerly on startup so refresh begins immediately."""
-    import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_in_executor(None, _get_svc)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

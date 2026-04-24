@@ -1172,25 +1172,11 @@ function marketUrl(name, wear, isStattrak) {
   return `https://market.csgo.com/en/?search=${query}`;
 }
 
-
+function escHtml(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-function marketUrl(name, wear, isStattrak) {
-  const prefix = isStattrak ? 'StatTrak™ ' : '';
-  const query = `${prefix}${name} (${wear})`;
-  return `https://market.csgo.com/en/?search=${encodeURIComponent(query)}`;
-}
 
-function openMarket(name, wear, isStattrak) {
-  haptic('light');
-  const url = marketUrl(name, wear, isStattrak);
-  if (tg && tg.openLink) {
-    tg.openLink(url);
-  } else {
-    window.open(url, '_blank');
-  }
-}
 
 // Filter chips
 document.querySelectorAll('.chip').forEach(chip => {
