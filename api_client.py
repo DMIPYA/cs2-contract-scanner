@@ -1849,12 +1849,485 @@ class CSFloatClient:
             return None
 
 
+class DMarketClient:
+    """Client for DMarket Trading API with Ed25519 request signing."""
+
+    BASE_URL = 'https://api.dmarket.com'
+    GAME_ID = 'a8db'  # CS2
+
+    def __init__(self):
+        self.public_key = str(os.getenv('DMARKET_PUBLIC_KEY', '') or '').strip()
+        self.secret_key = str(os.getenv('DMARKET_SECRET_KEY', '') or '').strip()
+        self.enabled = bool(
+            self.public_key and self.secret_key
+            and str(os.getenv('DMARKET_ENABLED', '1' if self.public_key else '0') or '').strip()
+            not in {'0', 'false', 'no', 'off'}
+        )
+
+        try:
+            self.http_timeout = float(os.getenv('DMARKET_HTTP_TIMEOUT', '20') or 20)
+        except Exception:
+            self.http_timeout = 20.0
+        try:
+            self.request_min_interval = float(os.getenv('DMARKET_REQUEST_MIN_INTERVAL', '0.1') or 0.1)
+        except Exception:
+            self.request_min_interval = 0.1
+        try:
+            self.cache_ttl = float(os.getenv('DMARKET_CACHE_TTL', '60') or 60)
+        except Exception:
+            self.cache_ttl = 60.0
+
+        self._session = requests.Session()
+        self._session.headers.update({'User-Agent': 'CS2-Contract-Analyzer/1.0'})
+        self._last_request_ts: float = 0.0
+        self._rate_lock = threading.RLock()
+
+        self._cache_lock = threading.RLock()
+        self._listings_cache: dict = {}   # key -> (ts, data)
+        self._prices_cache: dict = {}     # title -> (ts, price_usd)
+
+        self._signing_available = False
+        if self.enabled:
+            try:
+                import nacl.signing
+                import nacl.encoding
+                secret_bytes = bytes.fromhex(self.secret_key)
+                # DMarket returns 64-byte key (seed + public) — use only first 32 bytes as seed
+                seed = secret_bytes[:32]
+                self._signing_key = nacl.signing.SigningKey(seed)
+                self._signing_available = True
+            except ImportError:
+                logger.warning('DMarket: PyNaCl not installed. Run: pip install PyNaCl')
+            except Exception as e:
+                logger.warning('DMarket: failed to init signing key: %s', e)
+
+    def _rate_limit(self) -> None:
+        with self._rate_lock:
+            now = time.time()
+            delta = now - self._last_request_ts
+            if delta < self.request_min_interval:
+                time.sleep(self.request_min_interval - delta)
+            self._last_request_ts = time.time()
+
+    def _sign_request(self, method: str, path: str, body: str = '') -> dict:
+        """Build signed headers for a DMarket API request."""
+        if not self._signing_available:
+            return {}
+        try:
+            import nacl.signing
+            import nacl.encoding
+            ts = str(int(time.time()))
+            unsigned = f'{method}{path}{body}{ts}'
+            signed = self._signing_key.sign(unsigned.encode('utf-8'))
+            signature = signed.signature.hex()
+            return {
+                'X-Api-Key': self.public_key,
+                'X-Sign-Date': ts,
+                'X-Request-Sign': f'dmar ed25519 {signature}',
+                'Content-Type': 'application/json',
+            }
+        except Exception as e:
+            logger.debug('DMarket sign error: %s', e)
+            return {}
+
+    def _get(self, path: str, params: dict = None, timeout: float = None) -> Optional[dict]:
+        if not self.enabled or not self._signing_available:
+            return None
+        query = ''
+        if params:
+            query = '?' + '&'.join(f'{k}={v}' for k, v in sorted(params.items()) if v is not None)
+        full_path = path + query
+        headers = self._sign_request('GET', full_path)
+        if not headers:
+            return None
+        self._rate_limit()
+        req_timeout = timeout if timeout is not None else self.http_timeout
+        try:
+            resp = self._session.get(
+                self.BASE_URL + full_path,
+                headers=headers,
+                timeout=req_timeout,
+            )
+            if resp.status_code == 429:
+                logger.warning('DMarket: rate limited (429)')
+                return None
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.debug('DMarket GET %s failed: %s', path, e)
+            return None
+
+    def _post(self, path: str, body: dict) -> Optional[dict]:
+        if not self.enabled or not self._signing_available:
+            return None
+        import json as _json
+        body_str = _json.dumps(body, separators=(',', ':'))
+        headers = self._sign_request('POST', path, body_str)
+        if not headers:
+            return None
+        self._rate_limit()
+        try:
+            resp = self._session.post(
+                self.BASE_URL + path,
+                headers=headers,
+                data=body_str,
+                timeout=self.http_timeout,
+            )
+            if resp.status_code == 429:
+                logger.warning('DMarket: rate limited (429)')
+                return None
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            logger.debug('DMarket POST %s failed: %s', path, e)
+            return None
+
+    def get_aggregated_prices(self, titles: List[str]) -> Dict[str, float]:
+        """
+        Get best sell prices for a list of item titles.
+        Returns {title: price_usd} using offerBestPrice.
+        Prices are in cents in the API response — converted to USD here.
+        """
+        if not titles:
+            return {}
+
+        # Check cache
+        now = time.time()
+        result: Dict[str, float] = {}
+        missing = []
+        with self._cache_lock:
+            for t in titles:
+                cached = self._prices_cache.get(t)
+                if cached and (now - cached[0]) < self.cache_ttl:
+                    result[t] = cached[1]
+                else:
+                    missing.append(t)
+
+        if not missing:
+            return result
+
+        # Batch in chunks of 100
+        chunk_size = 100
+        for i in range(0, len(missing), chunk_size):
+            chunk = missing[i:i + chunk_size]
+            data = self._post('/marketplace-api/v1/aggregated-prices', {
+                'filter': {'game': self.GAME_ID, 'titles': chunk},
+                'limit': str(len(chunk)),
+            })
+            if not data:
+                continue
+            for item in data.get('aggregatedPrices') or []:
+                title = str(item.get('title') or '')
+                offer_price = item.get('offerBestPrice') or {}
+                # API returns Amount (capitalized) in cents
+                usd_cents = offer_price.get('Amount') or offer_price.get('USD')
+                if usd_cents is not None:
+                    try:
+                        price_usd = float(usd_cents) / 100.0
+                        result[title] = price_usd
+                        with self._cache_lock:
+                            self._prices_cache[title] = (time.time(), price_usd)
+                    except Exception:
+                        pass
+
+        return result
+
+    def get_listings(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        max_float: Optional[float] = None,
+        exclude_stattrak: bool = True,
+        require_stattrak: bool = False,
+        limit: int = 50,
+    ) -> List[Tuple[float, Optional[float], str]]:
+        """
+        Get listings for a skin from DMarket with real float values.
+        Returns list of (price_usd, float_value, wear).
+        """
+        if not self.enabled or not self._signing_available:
+            return []
+
+        # Build title with wear suffix for DMarket
+        wear_map = {
+            'Factory New': 'Factory New',
+            'Minimal Wear': 'Minimal Wear',
+            'Field-Tested': 'Field-Tested',
+            'Well-Worn': 'Well-Worn',
+            'Battle-Scarred': 'Battle-Scarred',
+        }
+        st_prefix = 'StatTrak™ ' if require_stattrak else ''
+        if target_wear and target_wear in wear_map:
+            title = f'{st_prefix}{skin_name} ({wear_map[target_wear]})'
+        else:
+            title = f'{st_prefix}{skin_name}'
+
+        # Check cache
+        cache_key = (title, max_float, exclude_stattrak, require_stattrak, limit)
+        now = time.time()
+        with self._cache_lock:
+            cached = self._listings_cache.get(cache_key)
+            if cached and (now - cached[0]) < self.cache_ttl:
+                return list(cached[1])
+
+        params = {
+            'Title': title,
+            'Limit': str(min(limit, 100)),
+        }
+        data = self._get('/exchange/v1/offers-by-title', params)
+        if not data:
+            return []
+
+        lots: List[Tuple[float, Optional[float], str]] = []
+        for obj in data.get('objects') or []:
+            try:
+                price_obj = obj.get('price') or {}
+                usd_cents = price_obj.get('USD')
+                if usd_cents is None:
+                    continue
+                price_usd = float(usd_cents) / 100.0
+                if price_usd <= 0:
+                    continue
+
+                extra = obj.get('extra') or {}
+                float_val = extra.get('floatValue')
+                try:
+                    float_val = float(float_val) if float_val is not None else None
+                except Exception:
+                    float_val = None
+
+                wear = str(extra.get('exterior') or '').replace('-', ' ').title()
+                # Normalize wear name
+                wear_norm = {
+                    'Factory New': 'Factory New',
+                    'Minimal Wear': 'Minimal Wear',
+                    'Field Tested': 'Field-Tested',
+                    'Well Worn': 'Well-Worn',
+                    'Battle Scarred': 'Battle-Scarred',
+                }.get(wear, wear)
+
+                # Float filter
+                if max_float is not None and float_val is not None:
+                    if float_val > float(max_float) + 1e-9:
+                        continue
+
+                # StatTrak filter
+                is_st = 'stattrak' in str(obj.get('title') or '').lower()
+                if exclude_stattrak and is_st:
+                    continue
+                if require_stattrak and not is_st:
+                    continue
+
+                lots.append((price_usd, float_val, wear_norm))
+            except Exception:
+                continue
+
+        lots.sort(key=lambda x: (x[0], 1.0 if x[1] is None else x[1]))
+        lots = lots[:limit]
+
+        with self._cache_lock:
+            self._listings_cache[cache_key] = (time.time(), list(lots))
+
+        return lots
+
+    def get_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        max_float: Optional[float] = None,
+        exclude_stattrak: bool = True,
+        require_stattrak: bool = False,
+        limit: int = 10,
+    ) -> Optional[float]:
+        lots = self.get_listings(
+            skin_name,
+            target_wear=target_wear,
+            max_float=max_float,
+            exclude_stattrak=exclude_stattrak,
+            require_stattrak=require_stattrak,
+            limit=limit,
+        )
+        return float(lots[0][0]) if lots else None
+
+    def get_last_sales(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[float]:
+        """Get recent sale prices for a skin. Returns list of USD prices."""
+        wear_map = {
+            'Factory New': 'factory new',
+            'Minimal Wear': 'minimal wear',
+            'Field-Tested': 'field-tested',
+            'Well-Worn': 'well-worn',
+            'Battle-Scarred': 'battle-scarred',
+        }
+        filters = ''
+        if target_wear and target_wear in wear_map:
+            filters = f'exterior[]={wear_map[target_wear]}'
+
+        params = {
+            'gameId': self.GAME_ID,
+            'title': skin_name,
+            'limit': str(min(limit, 20)),
+        }
+        if filters:
+            params['filters'] = filters
+
+        data = self._get('/trade-aggregator/v1/last-sales', params)
+        if not data:
+            return []
+
+        prices = []
+        for sale in data.get('sales') or []:
+            try:
+                price_obj = sale.get('price') or {}
+                usd = price_obj.get('USD')
+                if usd is not None:
+                    prices.append(float(usd) / 100.0)
+            except Exception:
+                continue
+        return prices
+
+    def load_all_prices(self) -> Optional[Dict[str, List[Tuple[float, Optional[float], str, bool]]]]:
+        """
+        Load all CS2 market items from DMarket via paginated GET /exchange/v1/market/items.
+        Returns cache dict compatible with MarketCSGOClient._prices_cache format:
+          {normalized_skin_name: [(price, float_val, wear, is_stattrak), ...]}
+        Rate limit: 10 RPS — at 100 items/page this takes ~10-20s for full catalog.
+        Returns None on failure.
+        """
+        if not self.enabled or not self._signing_available:
+            return None
+
+        new_cache: Dict[str, List[Tuple[float, Optional[float], str, bool]]] = {}
+        cursor = None
+        page_size = 30  # stable page size based on testing
+        total_loaded = 0
+        max_pages = int(os.getenv('DMARKET_MAX_PAGES', '500') or 500)
+        bulk_timeout = float(os.getenv('DMARKET_BULK_TIMEOUT', '30') or 30)
+        max_retries = 3
+
+        wear_norm_map = {
+            'factory new': 'Factory New',
+            'minimal wear': 'Minimal Wear',
+            'field-tested': 'Field-Tested',
+            'well-worn': 'Well-Worn',
+            'battle-scarred': 'Battle-Scarred',
+        }
+
+        for page_i in range(max_pages):
+            params: dict = {
+                'gameId': self.GAME_ID,
+                'currency': 'USD',
+                'limit': str(page_size),
+                'orderBy': 'price',
+                'orderDir': 'asc',
+            }
+            if cursor:
+                params['cursor'] = cursor
+
+            data = self._get('/exchange/v1/market/items', params, timeout=bulk_timeout)
+            if not data:
+                # Retry with smaller page on timeout
+                for retry in range(max_retries):
+                    time.sleep(0.5)
+                    data = self._get('/exchange/v1/market/items', params, timeout=bulk_timeout)
+                    if data:
+                        break
+            if not data:
+                logger.debug('DMarket load_all_prices: page %d returned no data after retries', page_i)
+                break
+
+            objects = data.get('objects') or []
+            if not objects:
+                break
+
+            for obj in objects:
+                try:
+                    price_obj = obj.get('price') or {}
+                    usd_cents = price_obj.get('USD')
+                    if usd_cents is None:
+                        # Try instantPrice as fallback
+                        price_obj = obj.get('instantPrice') or {}
+                        usd_cents = price_obj.get('USD')
+                    if usd_cents is None:
+                        continue
+                    price_usd = float(usd_cents) / 100.0
+                    if price_usd <= 0:
+                        continue
+
+                    title = str(obj.get('title') or '')
+                    if ' | ' not in title:
+                        continue
+                    if 'souvenir' in title.lower():
+                        continue
+
+                    extra = obj.get('extra') or {}
+                    float_val = extra.get('floatValue')
+                    try:
+                        float_val = float(float_val) if float_val is not None else None
+                    except Exception:
+                        float_val = None
+
+                    exterior = str(extra.get('exterior') or '').lower()
+                    # DMarket returns exterior as "battle-scarred" or "minimal wear" etc.
+                    wear = wear_norm_map.get(exterior) or wear_norm_map.get(exterior.replace('-', ' '))
+                    if not wear and float_val is not None:
+                        # Determine wear from float
+                        if float_val < 0.07:
+                            wear = 'Factory New'
+                        elif float_val < 0.15:
+                            wear = 'Minimal Wear'
+                        elif float_val < 0.38:
+                            wear = 'Field-Tested'
+                        elif float_val < 0.45:
+                            wear = 'Well-Worn'
+                        else:
+                            wear = 'Battle-Scarred'
+
+                    is_stattrak = 'stattrak' in title.lower()
+
+                    # Normalize name (strip wear suffix and stattrak prefix)
+                    norm_name = title.lower()
+                    for w in wear_norm_map.values():
+                        norm_name = norm_name.replace(f' ({w.lower()})', '')
+                    norm_name = norm_name.replace('stattrak™ ', '').replace('stattrak™', '').strip()
+
+                    if not norm_name:
+                        continue
+
+                    if norm_name not in new_cache:
+                        new_cache[norm_name] = []
+                    new_cache[norm_name].append((price_usd, float_val, wear, is_stattrak))
+                    total_loaded += 1
+                except Exception:
+                    continue
+
+            cursor = data.get('cursor')
+            if not cursor:
+                break
+
+            # Rate limit: 10 RPS → 0.1s between requests (already handled by _rate_limit)
+
+        if not new_cache:
+            return None
+
+        logger.info('DMarket: loaded %d items across %d unique skins', total_loaded, len(new_cache))
+        return new_cache
+
+
 class PriceManager:
     """Менеджер цен для работы с Full Export API"""
     
     def __init__(self):
         self.market_client = MarketCSGOClient()
         self.csfloat_client = CSFloatClient()
+        self.dmarket_client = DMarketClient()
     
     def initialize(self) -> bool:
         """Инициализация с быстрым стартом.
@@ -1885,7 +2358,39 @@ class PriceManager:
         return mc.load_prices()
 
     def refresh_prices(self, force_refresh: bool = True) -> bool:
-        return self.market_client.load_prices(force_refresh=force_refresh)
+        """Refresh prices from market.csgo and optionally DMarket in parallel."""
+        import threading as _threading
+
+        market_ok = self.market_client.load_prices(force_refresh=force_refresh)
+
+        # Load DMarket prices in background and merge into market cache
+        if self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
+            def _load_dmarket():
+                try:
+                    dm_cache = self.dmarket_client.load_all_prices()
+                    if not dm_cache:
+                        return
+                    mc = self.market_client
+                    with mc._prices_cache_lock:
+                        for norm_name, lots in dm_cache.items():
+                            if norm_name not in mc._prices_cache:
+                                mc._prices_cache[norm_name] = []
+                            # Add DMarket lots that aren't already present (by price+float)
+                            existing = {(round(l[0], 2), round(l[1], 4) if l[1] is not None else None)
+                                        for l in mc._prices_cache[norm_name]}
+                            for lot in lots:
+                                key = (round(lot[0], 2), round(lot[1], 4) if lot[1] is not None else None)
+                                if key not in existing:
+                                    mc._prices_cache[norm_name].append(lot)
+                                    existing.add(key)
+                    logger.info('DMarket: merged %d skins into price cache', len(dm_cache))
+                except Exception as e:
+                    logger.debug('DMarket load_all_prices failed: %s', e)
+
+            t = _threading.Thread(target=_load_dmarket, daemon=True)
+            t.start()
+
+        return market_ok
     
     def get_skin_price(
         self,
@@ -1909,6 +2414,9 @@ class PriceManager:
         Returns:
             float: цена или None
         """
+        prices = []
+
+        # CSFloat — real float data, most accurate for float-filtered queries
         if self.csfloat_client and bool(getattr(self.csfloat_client, 'enabled', False)):
             try:
                 val = self.csfloat_client.get_price(
@@ -1920,9 +2428,29 @@ class PriceManager:
                     limit=50,
                 )
                 if val is not None and float(val) > 0:
-                    return float(val)
+                    prices.append(float(val))
             except Exception:
                 pass
+
+        # DMarket — additional price source with real float data
+        if self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
+            try:
+                val = self.dmarket_client.get_price(
+                    skin_name,
+                    target_wear=target_wear,
+                    max_float=max_float,
+                    exclude_stattrak=exclude_stattrak,
+                    require_stattrak=require_stattrak,
+                    limit=10,
+                )
+                if val is not None and float(val) > 0:
+                    prices.append(float(val))
+            except Exception:
+                pass
+
+        # Return cheapest price across sources
+        if prices:
+            return min(prices)
 
         return self.market_client.get_price(
             skin_name,
@@ -2029,9 +2557,8 @@ class PriceManager:
         allow_refresh: bool = True,
         limit: int = 50,
     ) -> List[Tuple[float, Optional[float], str]]:
-        # CSFloat intentionally excluded here — used only in explicit float optimization
-        # (_fetch_price_curve) and sell price calculation (_calculate_contract_profit).
-        return self.market_client.get_listings(
+        # Merge listings from market cache and DMarket (which has real float data)
+        market_lots = self.market_client.get_listings(
             skin_name,
             target_wear=target_wear,
             max_float=max_float,
@@ -2041,6 +2568,32 @@ class PriceManager:
             allow_refresh=allow_refresh,
             limit=limit,
         )
+
+        if self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
+            try:
+                dm_lots = self.dmarket_client.get_listings(
+                    skin_name,
+                    target_wear=target_wear,
+                    max_float=max_float,
+                    exclude_stattrak=exclude_stattrak,
+                    require_stattrak=require_stattrak,
+                    limit=limit,
+                )
+                if dm_lots:
+                    # Merge and sort by price, deduplicate by (price, float)
+                    merged = list(market_lots) + list(dm_lots)
+                    seen = set()
+                    result = []
+                    for lot in sorted(merged, key=lambda x: (x[0], 1.0 if x[1] is None else x[1])):
+                        key = (round(lot[0], 2), round(lot[1], 4) if lot[1] is not None else None)
+                        if key not in seen:
+                            seen.add(key)
+                            result.append(lot)
+                    return result[:limit]
+            except Exception:
+                pass
+
+        return market_lots
 
     def get_best_buy_with_float(
         self,
@@ -2103,7 +2656,8 @@ class PriceManager:
         strict_name_match: bool = False,
         allow_refresh: bool = True,
     ) -> Optional[float]:
-        return self.market_client.get_effective_sell_price(
+        # Get market.csgo effective sell price (liquidity-adjusted)
+        market_price = self.market_client.get_effective_sell_price(
             skin_name,
             target_wear=target_wear,
             max_float=max_float,
@@ -2112,3 +2666,26 @@ class PriceManager:
             strict_name_match=strict_name_match,
             allow_refresh=allow_refresh,
         )
+
+        # Check DMarket for potentially better sell price
+        if self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
+            try:
+                dm_price = self.dmarket_client.get_price(
+                    skin_name,
+                    target_wear=target_wear,
+                    max_float=max_float,
+                    exclude_stattrak=exclude_stattrak,
+                    require_stattrak=require_stattrak,
+                    limit=5,
+                )
+                if dm_price is not None and float(dm_price) > 0:
+                    # Apply DMarket fee (~5%) to get net sell price
+                    dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
+                    dm_net = float(dm_price) * (1.0 - dm_fee)
+                    # Return best net price across platforms
+                    if market_price is None or dm_net > float(market_price):
+                        return dm_net
+            except Exception:
+                pass
+
+        return market_price

@@ -529,7 +529,7 @@ class TargetHuntingService:
 
         def _worker():
             refresh_after_seconds = 60 * 60
-            check_every_seconds = 60
+            check_every_seconds = 10
             modes = ['PROFIT', 'SAFE']
 
             while not self._stop.is_set():
