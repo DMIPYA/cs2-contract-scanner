@@ -976,17 +976,6 @@ function renderSkeletons(n) {
 // LOAD DATA
 // ════════════════════════════════════════════════════════════════════════════
 
-function setMarket(market) {
-  state.preferredMarket = market;
-  localStorage.setItem('preferredMarket', market);
-  document.getElementById('mkt-csgo').classList.toggle('active', market === 'marketcsgo');
-  document.getElementById('mkt-dm').classList.toggle('active', market === 'dmarket');
-  haptic('light');
-}
-
-// Init market toggle state
-setMarket(state.preferredMarket);
-
 async function loadContracts(showSkeleton = true) {
   if (state.loading) return;
   state.loading = true;
