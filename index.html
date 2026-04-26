@@ -1139,7 +1139,7 @@ function renderDetailFull(c) {
     <div class="input-wear">${wearLine}</div>
   </div>
   <div class="input-right">
-    <div class="input-price">$${fmt$(g.total_price)} <span style="font-size:8px;color:var(--text4);letter-spacing:.5px">${{'MARKETCSGO':'MC','DMARKET':'DM','CSFLOAT':'CF'}[g.buy_source] || 'MC'}</span></div>
+    <div class="input-price">$${fmt$(g.total_price)} ${srcBadge(g.buy_source)}</div>
     ${perItemTxt ? `<div class="input-float">${perItemTxt}</div>` : ''}
   </div>
 </a>`;
@@ -1165,7 +1165,7 @@ function renderDetailFull(c) {
     <div class="outcome-prob">${prob.toFixed(2)}% chance · ${escHtml(o.wear)}</div>
   </div>
   <div class="outcome-right">
-    <div class="outcome-price">$${fmt$(o.price)} <span style="font-size:8px;color:var(--text4);letter-spacing:.5px">${{'MARKETCSGO':'MC','DMARKET':'DM','CSFLOAT':'CF'}[o.sell_source] || 'MC'}</span></div>
+    <div class="outcome-price">$${fmt$(o.price)} ${srcBadge(o.sell_source)}</div>
     <span class="wear-tag ${o.wear_abbr}">${o.wear_abbr}</span>
   </div>
 </a>`;
@@ -1193,7 +1193,13 @@ function marketUrl(name, wear, isStattrak, source) {
   return `https://market.csgo.com/en/?search=${query}`;
 }
 
-function escHtml(s) {
+function srcBadge(source) {
+  const m = {'MARKETCSGO':'MC','DMARKET':'DM','CSFLOAT':'CF'};
+  const label = m[source] || 'MC';
+  return `<span style="font-size:8px;color:var(--text4);letter-spacing:.5px">${label}</span>`;
+}
+
+
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
