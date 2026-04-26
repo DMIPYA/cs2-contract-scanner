@@ -528,7 +528,7 @@ class TargetHuntingService:
             return
 
         def _worker():
-            refresh_after_seconds = 60 * 60
+            refresh_after_seconds = 2 * 60 * 60
             check_every_seconds = 10
             modes = ['PROFIT', 'SAFE']
 

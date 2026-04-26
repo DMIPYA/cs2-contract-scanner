@@ -976,6 +976,17 @@ function renderSkeletons(n) {
 // LOAD DATA
 // ════════════════════════════════════════════════════════════════════════════
 
+function setMarket(market) {
+  state.preferredMarket = market;
+  localStorage.setItem('preferredMarket', market);
+  document.getElementById('mkt-csgo').classList.toggle('active', market === 'marketcsgo');
+  document.getElementById('mkt-dm').classList.toggle('active', market === 'dmarket');
+  haptic('light');
+}
+
+// Init market toggle state
+setMarket(state.preferredMarket);
+
 async function loadContracts(showSkeleton = true) {
   if (state.loading) return;
   state.loading = true;
@@ -1121,14 +1132,14 @@ function renderDetailFull(c) {
         ? `${escHtml(g.wear)} · max ${maxF.toFixed(4)}`
         : escHtml(g.wear);
       return `
-<a class="input-item" data-gidx="${gIdx}" href="${marketUrl(g.name, g.wear, c.is_stattrak)}" target="_blank" rel="noopener" style="text-decoration:none">
+<a class="input-item" data-gidx="${gIdx}" href="${marketUrl(g.name, g.wear, c.is_stattrak, g.buy_source)}" target="_blank" rel="noopener" style="text-decoration:none">
   <div class="input-idx">${rangeLabel}</div>
   <div class="input-info">
     <div class="input-name">${escHtml(g.name)}</div>
     <div class="input-wear">${wearLine}</div>
   </div>
   <div class="input-right">
-    <div class="input-price">$${fmt$(g.total_price)}</div>
+    <div class="input-price">$${fmt$(g.total_price)} <span style="font-size:8px;color:var(--text4);letter-spacing:.5px">${{'MARKETCSGO':'MC','DMARKET':'DM','CSFLOAT':'CF'}[g.buy_source] || 'MC'}</span></div>
     ${perItemTxt ? `<div class="input-float">${perItemTxt}</div>` : ''}
   </div>
 </a>`;
@@ -1148,13 +1159,13 @@ function renderDetailFull(c) {
     outcomesList.innerHTML = outcomes.map(o => {
       const prob = parseFloat(o.probability) || 0;
       return `
-<a class="outcome-item" href="${marketUrl(o.name, o.wear, c.is_stattrak)}" target="_blank" rel="noopener" style="text-decoration:none">
+<a class="outcome-item" href="${marketUrl(o.name, o.wear, c.is_stattrak, o.sell_source)}" target="_blank" rel="noopener" style="text-decoration:none">
   <div class="outcome-left">
     <div class="outcome-name">${escHtml(o.name)}</div>
     <div class="outcome-prob">${prob.toFixed(2)}% chance · ${escHtml(o.wear)}</div>
   </div>
   <div class="outcome-right">
-    <div class="outcome-price">$${fmt$(o.price)}</div>
+    <div class="outcome-price">$${fmt$(o.price)} <span style="font-size:8px;color:var(--text4);letter-spacing:.5px">${{'MARKETCSGO':'MC','DMARKET':'DM','CSFLOAT':'CF'}[o.sell_source] || 'MC'}</span></div>
     <span class="wear-tag ${o.wear_abbr}">${o.wear_abbr}</span>
   </div>
 </a>`;
@@ -1166,8 +1177,18 @@ function renderDetailFull(c) {
 // EVENTS — FILTERS, MODE, REFRESH
 // ════════════════════════════════════════════════════════════════════════════
 
-function marketUrl(name, wear, isStattrak) {
+function marketUrl(name, wear, isStattrak, source) {
   const prefix = isStattrak ? 'StatTrak™ ' : '';
+  const src = (source || 'MARKETCSGO').toUpperCase();
+  if (src === 'DMARKET') {
+    const query = encodeURIComponent(`${prefix}${name} (${wear})`);
+    return `https://dmarket.com/ingame-items/item-list/csgo-skins?title=${query}`;
+  }
+  if (src === 'CSFLOAT') {
+    const query = encodeURIComponent(`${prefix}${name} (${wear})`);
+    return `https://csfloat.com/search?query=${query}`;
+  }
+  // Default: market.csgo
   const query = encodeURIComponent(`${prefix}${name} (${wear})`);
   return `https://market.csgo.com/en/?search=${query}`;
 }

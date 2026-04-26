@@ -3755,6 +3755,34 @@ class ContractCalculator:
                         sell_source = 'CSFLOAT'
                         sell_fee = float(self.csfloat_fee)
 
+                    # Check DMarket with liquidity validation
+                    try:
+                        dmc = getattr(self.price_manager, 'dmarket_client', None)
+                        if dmc is not None and bool(getattr(dmc, 'enabled', False)):
+                            dm_min = int(os.getenv('DMARKET_SELL_MIN_LISTINGS', '3') or 3)
+                            dm_max_ratio = float(os.getenv('DMARKET_SELL_MAX_RATIO', '2.0') or 2.0)
+                            dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
+                            dm_lots = dmc.get_listings(
+                                skin_name,
+                                target_wear=wear,
+                                exclude_stattrak=not is_stattrak,
+                                require_stattrak=bool(is_stattrak),
+                                limit=dm_min + 5,
+                            )
+                            if len(dm_lots) >= dm_min:
+                                dm_prices = sorted([float(l[0]) for l in dm_lots[:dm_min]])
+                                dm_median = dm_prices[len(dm_prices) // 2]
+                                dm_net = dm_median * (1.0 - dm_fee)
+                                # Sanity: must be better than current best and within ratio
+                                if dm_net > float(best_net) + 1e-12:
+                                    market_ref = float(market_net)
+                                    if market_ref <= 0 or dm_net <= market_ref * dm_max_ratio:
+                                        best_net = dm_net
+                                        sell_source = 'DMARKET'
+                                        sell_fee = dm_fee
+                    except Exception:
+                        pass
+
                     price = float(best_net)
 
                 outcomes.append({

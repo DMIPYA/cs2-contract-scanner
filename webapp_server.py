@@ -266,6 +266,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                 'total_price': 0.0,
                 'floats': [],
                 'max_float_for_wear': s.get('max_float_for_wear'),
+                'buy_source': str(s.get('buy_source') or 'MARKETCSGO'),
                 'individual_skins': [],
             }
             groups[key] = g
@@ -321,6 +322,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
             'per_item': per_item,
             'avg_float': avg_float,
             'max_float_for_wear': round(mf, 4) if mf is not None else None,
+            'buy_source': g['buy_source'],
             'individual_skins': g['individual_skins'],
         })
 
@@ -335,6 +337,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
             'probability': round(float(o.get('probability') or 0.0) * 100.0, 2),
             'wear': wr,
             'wear_abbr': _WEAR_ABBR.get(wr, wr[:2].upper() if wr else '?'),
+            'sell_source': str(o.get('sell_source') or 'MARKETCSGO'),
         })
 
     core = f"{int(c.get('main_skins_count') or 0)}/{int(c.get('filler_skins_count') or 0)}"

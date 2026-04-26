@@ -2618,7 +2618,10 @@ class PriceManager:
         require_stattrak: bool = False,
         limit: int = 50,
     ) -> Optional[Tuple[float, Optional[float], str, str]]:
-        # CSFloat intentionally excluded here — market cache only for bulk operations.
+        """Return cheapest available lot across all enabled sources: (price, float, wear, source)."""
+        candidates = []
+
+        # market.csgo
         try:
             lots = self.market_client.get_listings(
                 skin_name,
@@ -2632,10 +2635,48 @@ class PriceManager:
             )
             if lots:
                 p, f, w = lots[0]
-                return (float(p), f, str(w or ''), 'MARKETCSGO')
+                candidates.append((float(p), f, str(w or ''), 'MARKETCSGO'))
         except Exception:
             pass
-        return None
+
+        # CSFloat — real float data, useful for float-constrained buys
+        if self.csfloat_client and bool(getattr(self.csfloat_client, 'enabled', False)):
+            try:
+                cf_lots = self.csfloat_client.get_listings(
+                    skin_name,
+                    target_wear=target_wear,
+                    max_float=max_float,
+                    exclude_stattrak=exclude_stattrak,
+                    require_stattrak=require_stattrak,
+                    limit=10,
+                )
+                if cf_lots:
+                    p, f, w = cf_lots[0]
+                    candidates.append((float(p), f, str(w or ''), 'CSFLOAT'))
+            except Exception:
+                pass
+
+        # DMarket — additional source with real float data
+        if self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
+            try:
+                dm_lots = self.dmarket_client.get_listings(
+                    skin_name,
+                    target_wear=target_wear,
+                    max_float=max_float,
+                    exclude_stattrak=exclude_stattrak,
+                    require_stattrak=require_stattrak,
+                    limit=10,
+                )
+                if dm_lots:
+                    p, f, w = dm_lots[0]
+                    candidates.append((float(p), f, str(w or ''), 'DMARKET'))
+            except Exception:
+                pass
+
+        if not candidates:
+            return None
+        # Return cheapest lot across all sources
+        return min(candidates, key=lambda x: x[0])
 
     def get_liquidity_metrics(
         self,
@@ -2669,7 +2710,7 @@ class PriceManager:
         strict_name_match: bool = False,
         allow_refresh: bool = True,
     ) -> Optional[float]:
-        # Get market.csgo effective sell price (liquidity-adjusted)
+        # Get market.csgo liquidity-adjusted sell price as baseline
         market_price = self.market_client.get_effective_sell_price(
             skin_name,
             target_wear=target_wear,
@@ -2680,25 +2721,39 @@ class PriceManager:
             allow_refresh=allow_refresh,
         )
 
-        # Check DMarket for potentially better sell price
+        # Check DMarket for better sell price, but only if liquidity is sufficient.
+        # Require at least DMARKET_SELL_MIN_LISTINGS lots and price within
+        # DMARKET_SELL_MAX_RATIO of market.csgo price to filter inflated listings.
         if self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
             try:
-                dm_price = self.dmarket_client.get_price(
+                dm_min_listings = int(os.getenv('DMARKET_SELL_MIN_LISTINGS', '3') or 3)
+                dm_max_ratio = float(os.getenv('DMARKET_SELL_MAX_RATIO', '2.0') or 2.0)
+                dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
+
+                dm_lots = self.dmarket_client.get_listings(
                     skin_name,
                     target_wear=target_wear,
                     max_float=max_float,
                     exclude_stattrak=exclude_stattrak,
                     require_stattrak=require_stattrak,
-                    limit=5,
+                    limit=dm_min_listings + 5,
                 )
-                if dm_price is not None and float(dm_price) > 0:
-                    # Apply DMarket fee (~5%) to get net sell price
-                    dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
-                    dm_net = float(dm_price) * (1.0 - dm_fee)
-                    # Return best net price across platforms
-                    if market_price is None or dm_net > float(market_price):
+
+                if len(dm_lots) >= dm_min_listings:
+                    # Use median of top-N lots (more robust than cheapest single lot)
+                    prices = sorted([float(l[0]) for l in dm_lots[:dm_min_listings]])
+                    dm_median = prices[len(prices) // 2]
+                    dm_net = dm_median * (1.0 - dm_fee)
+
+                    if market_price is not None:
+                        # Only use DMarket if it's better AND within sanity ratio
+                        if dm_net > float(market_price) and dm_net <= float(market_price) * dm_max_ratio:
+                            return dm_net
+                    else:
+                        # No market.csgo data — use DMarket as fallback
                         return dm_net
             except Exception:
                 pass
 
         return market_price
+
