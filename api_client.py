@@ -2082,6 +2082,11 @@ class DMarketClient:
         lots: List[Tuple[float, Optional[float], str]] = []
         for obj in data.get('objects') or []:
             try:
+                obj_title = str(obj.get('title') or '')
+                # Skip souvenir items — cannot be used in trade-up contracts
+                if 'souvenir' in obj_title.lower():
+                    continue
+
                 price_obj = obj.get('price') or {}
                 usd_cents = price_obj.get('USD')
                 if usd_cents is None:
@@ -2264,6 +2269,7 @@ class DMarketClient:
                     title = str(obj.get('title') or '')
                     if ' | ' not in title:
                         continue
+                    # Skip souvenir items — cannot be used in trade-up contracts
                     if 'souvenir' in title.lower():
                         continue
 
@@ -2373,16 +2379,23 @@ class PriceManager:
                     mc = self.market_client
                     with mc._prices_cache_lock:
                         for norm_name, lots in dm_cache.items():
+                            # Skip souvenir items
+                            if 'souvenir' in norm_name.lower():
+                                continue
                             if norm_name not in mc._prices_cache:
                                 mc._prices_cache[norm_name] = []
                             # Add DMarket lots that aren't already present (by price+float)
                             existing = {(round(l[0], 2), round(l[1], 4) if l[1] is not None else None)
                                         for l in mc._prices_cache[norm_name]}
                             for lot in lots:
+                                # Skip souvenir lots
+                                if len(lot) > 3 and lot[3]:  # is_stattrak field used as marker
+                                    pass
                                 key = (round(lot[0], 2), round(lot[1], 4) if lot[1] is not None else None)
                                 if key not in existing:
                                     mc._prices_cache[norm_name].append(lot)
                                     existing.add(key)
+                    mc._reset_prefix_cache()
                     logger.info('DMarket: merged %d skins into price cache', len(dm_cache))
                 except Exception as e:
                     logger.debug('DMarket load_all_prices failed: %s', e)
