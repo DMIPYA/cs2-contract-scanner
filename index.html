@@ -538,10 +538,17 @@ body {
       <div class="section-hdr" id="section-hdr" style="display:none">
         <div class="section-hdr-left">
           <div class="section-stripe"></div>
-          <div class="section-title">Profitable Contracts</div>
+          <div class="section-title">Contracts</div>
           <div class="section-count" id="section-count"></div>
         </div>
-        <button class="refresh-btn" id="refresh-btn">↻ Refresh</button>
+        <div style="display:flex;align-items:center;gap:8px">
+          <select id="sort-select" onchange="onSortChange(this.value)" style="background:var(--surface2);border:1px solid var(--border2);color:var(--text3);font-size:9px;letter-spacing:1px;padding:3px 6px;border-radius:2px;cursor:pointer;text-transform:uppercase">
+            <option value="profit">Profit $</option>
+            <option value="roi">ROI %</option>
+            <option value="jackpot">Jackpot</option>
+          </select>
+          <button class="refresh-btn" id="refresh-btn">↻ Refresh</button>
+        </div>
       </div>
 
       <!-- Cards list -->
@@ -733,6 +740,7 @@ const state = {
   filtered: [],
   loading: false,
   cacheAge: null,
+  sort: 'profit',
 };
 
 let detailData = null;
@@ -818,13 +826,35 @@ async function fetchDetail(idx, mode) {
 // RENDER HOME
 // ════════════════════════════════════════════════════════════════════════════
 
+function onSortChange(val) {
+  state.sort = val;
+  haptic('light');
+  applyFilter();
+}
+
+function onSortChange(val) {
+  haptic('light');
+  state.sort = val;
+  applyFilter();
+}
+
+function sortContracts(list) {
+  const s = state.sort;
+  return [...list].sort((a, b) => {
+    if (s === 'roi')     return (b.roi || 0) - (a.roi || 0);
+    if (s === 'jackpot') return (b.jackpot_ratio || 0) - (a.jackpot_ratio || 0);
+    if (s === 'pp')      return (b.profit_probability || 0) - (a.profit_probability || 0);
+    return (b.net_profit || 0) - (a.net_profit || 0); // default: profit
+  });
+}
+
 function applyFilter() {
   const r = state.rarity;
-  if (!r || r === 'all') {
-    state.filtered = state.contracts;
-  } else {
-    state.filtered = state.contracts.filter(c => c.rarity === r);
+  let base = state.contracts;
+  if (r && r !== 'all') {
+    base = base.filter(c => c.rarity === r);
   }
+  state.filtered = sortContracts(base);
   renderList();
 }
 
