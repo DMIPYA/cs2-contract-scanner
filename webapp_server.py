@@ -266,7 +266,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                 'total_price': 0.0,
                 'floats': [],
                 'max_float_for_wear': s.get('max_float_for_wear'),
-                'buy_source': str(s.get('buy_source') or 'MARKETCSGO'),
+                'buy_source': str(s.get('buy_source') or ''),
                 'individual_skins': [],
             }
             groups[key] = g

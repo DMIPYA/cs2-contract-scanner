@@ -3727,8 +3727,41 @@ class ContractCalculator:
                 )
                 price = float(price) if price is not None else 0.0
 
+                # Determine sell_source by comparing prices across platforms
                 sell_source = 'MARKETCSGO'
                 sell_fee = float(self.market_fee)
+                market_raw = self.price_manager.market_client.get_effective_sell_price(
+                    skin_name, target_wear=wear, exclude_stattrak=not is_stattrak,
+                    require_stattrak=bool(is_stattrak), allow_refresh=False,
+                ) if price > 0 else None
+                if market_raw is not None and abs(price - float(market_raw)) > 0.01:
+                    # Price differs from market.csgo — check which source it came from
+                    dmc = getattr(self.price_manager, 'dmarket_client', None)
+                    if dmc and bool(getattr(dmc, 'enabled', False)):
+                        try:
+                            dm_min = int(os.getenv('DMARKET_SELL_MIN_LISTINGS', '3') or 3)
+                            dm_lots = dmc.get_listings(skin_name, target_wear=wear,
+                                exclude_stattrak=not is_stattrak, require_stattrak=bool(is_stattrak), limit=dm_min+2)
+                            if len(dm_lots) >= dm_min:
+                                dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
+                                dm_prices = sorted([float(l[0]) for l in dm_lots[:dm_min]])
+                                dm_net = dm_prices[len(dm_prices)//2] * (1.0 - dm_fee)
+                                if abs(price - dm_net) < 0.05:
+                                    sell_source = 'DMARKET'
+                                    sell_fee = dm_fee
+                        except Exception:
+                            pass
+                    if sell_source == 'MARKETCSGO':
+                        cfc = getattr(self.price_manager, 'csfloat_client', None)
+                        if cfc and bool(getattr(cfc, 'enabled', False)):
+                            try:
+                                cf_price = cfc.get_price(skin_name, target_wear=wear,
+                                    exclude_stattrak=not is_stattrak, require_stattrak=bool(is_stattrak), limit=5)
+                                if cf_price and abs(price - float(cf_price) * (1.0 - float(self.csfloat_fee))) < 0.05:
+                                    sell_source = 'CSFLOAT'
+                                    sell_fee = float(self.csfloat_fee)
+                            except Exception:
+                                pass
                 if bool(self._multisource_net_pricing):
                     market_net = float(price) * (1.0 - float(self.market_fee))
                     best_net = float(market_net)

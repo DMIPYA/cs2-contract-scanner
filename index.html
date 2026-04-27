@@ -1213,8 +1213,10 @@ function marketUrl(name, wear, isStattrak, source) {
 }
 
 function srcBadge(source) {
+  if (!source) return '';
   const m = {'MARKETCSGO':'MC','DMARKET':'DM','CSFLOAT':'CF'};
-  const label = m[source] || 'MC';
+  const label = m[source];
+  if (!label) return '';
   return `<span style="font-size:8px;color:var(--text4);letter-spacing:.5px">${label}</span>`;
 }
 
