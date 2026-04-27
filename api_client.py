@@ -1885,6 +1885,7 @@ class DMarketClient:
         self._cache_lock = threading.RLock()
         self._listings_cache: dict = {}   # key -> (ts, data)
         self._prices_cache: dict = {}     # title -> (ts, price_usd)
+        self._last_sales_cache: dict = {} # (title, limit) -> (ts, prices)
 
         self._signing_available = False
         if self.enabled:
@@ -2171,7 +2172,10 @@ class DMarketClient:
         target_wear: Optional[str] = None,
         limit: int = 20,
     ) -> List[float]:
-        """Get recent sale prices for a skin. Returns list of USD prices."""
+        """Get recent sale prices for a skin. Returns list of USD prices.
+        Results are cached for cache_ttl seconds to avoid hammering the API
+        during refine (which calls this for every outcome of every contract).
+        """
         # Include wear in title — DMarket matches by full item name
         wear_suffix = {
             'Factory New': 'Factory New',
@@ -2184,6 +2188,15 @@ class DMarketClient:
         if target_wear and target_wear in wear_suffix:
             title = f'{skin_name} ({wear_suffix[target_wear]})'
 
+        cache_key = (title, min(limit, 20))
+        now = time.time()
+        with self._cache_lock:
+            cached = self._last_sales_cache.get(cache_key)
+            if cached is not None:
+                ts, prices = cached
+                if now - ts < self.cache_ttl:
+                    return list(prices)
+
         params = {
             'gameId': self.GAME_ID,
             'title': title,
@@ -2192,6 +2205,9 @@ class DMarketClient:
 
         data = self._get('/trade-aggregator/v1/last-sales', params)
         if not data:
+            # Cache empty result too (briefly) to avoid hammering on missing skins
+            with self._cache_lock:
+                self._last_sales_cache[cache_key] = (now, [])
             return []
 
         prices = []
@@ -2213,6 +2229,9 @@ class DMarketClient:
                             prices.append(float(usd) / 100.0)
             except Exception:
                 continue
+
+        with self._cache_lock:
+            self._last_sales_cache[cache_key] = (now, list(prices))
         return prices
 
     def load_all_prices(self) -> Optional[Dict[str, List[Tuple[float, Optional[float], str, bool]]]]:
