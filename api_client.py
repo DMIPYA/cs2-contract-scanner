@@ -1933,9 +1933,17 @@ class DMarketClient:
     def _get(self, path: str, params: dict = None, timeout: float = None) -> Optional[dict]:
         if not self.enabled or not self._signing_available:
             return None
+        import urllib.parse
         query = ''
         if params:
-            query = '?' + '&'.join(f'{k}={v}' for k, v in sorted(params.items()) if v is not None)
+            sorted_params = sorted((k, v) for k, v in params.items() if v is not None)
+            parts = []
+            for k, v in sorted_params:
+                # Preserve [], =, spaces as %20 — match what DMarket expects in signature
+                enc_k = urllib.parse.quote(str(k), safe='[]')
+                enc_v = urllib.parse.quote(str(v), safe='[]=')
+                parts.append(f'{enc_k}={enc_v}')
+            query = '?' + '&'.join(parts)
         full_path = path + query
         headers = self._sign_request('GET', full_path)
         if not headers:
@@ -2164,24 +2172,23 @@ class DMarketClient:
         limit: int = 20,
     ) -> List[float]:
         """Get recent sale prices for a skin. Returns list of USD prices."""
-        wear_map = {
-            'Factory New': 'factory new',
-            'Minimal Wear': 'minimal wear',
-            'Field-Tested': 'field-tested',
-            'Well-Worn': 'well-worn',
-            'Battle-Scarred': 'battle-scarred',
+        # Include wear in title — DMarket matches by full item name
+        wear_suffix = {
+            'Factory New': 'Factory New',
+            'Minimal Wear': 'Minimal Wear',
+            'Field-Tested': 'Field-Tested',
+            'Well-Worn': 'Well-Worn',
+            'Battle-Scarred': 'Battle-Scarred',
         }
-        filters = ''
-        if target_wear and target_wear in wear_map:
-            filters = f'exterior[]={wear_map[target_wear]}'
+        title = skin_name
+        if target_wear and target_wear in wear_suffix:
+            title = f'{skin_name} ({wear_suffix[target_wear]})'
 
         params = {
             'gameId': self.GAME_ID,
-            'title': skin_name,
+            'title': title,
             'limit': str(min(limit, 20)),
         }
-        if filters:
-            params['filters'] = filters
 
         data = self._get('/trade-aggregator/v1/last-sales', params)
         if not data:
@@ -2190,10 +2197,20 @@ class DMarketClient:
         prices = []
         for sale in data.get('sales') or []:
             try:
-                price_obj = sale.get('price') or {}
-                usd = price_obj.get('USD')
-                if usd is not None:
-                    prices.append(float(usd) / 100.0)
+                # DMarket last-sales returns price as a string (USD cents or dollars)
+                price_raw = sale.get('price')
+                if price_raw is not None:
+                    price_usd = float(price_raw)
+                    # Values like 276.29 are already in USD (not cents)
+                    if price_usd > 0:
+                        prices.append(price_usd)
+                else:
+                    # Fallback: nested price object
+                    price_obj = sale.get('price') or {}
+                    if isinstance(price_obj, dict):
+                        usd = price_obj.get('USD')
+                        if usd is not None:
+                            prices.append(float(usd) / 100.0)
             except Exception:
                 continue
         return prices
@@ -2377,26 +2394,21 @@ class PriceManager:
                     if not dm_cache:
                         return
                     mc = self.market_client
+                    # Only add DMarket lots for skins that have NO market.csgo data.
+                    # This prevents DMarket's raw ask prices from inflating sell price estimates.
+                    # DMarket is queried directly (with liquidity checks) when needed.
                     with mc._prices_cache_lock:
+                        added = 0
                         for norm_name, lots in dm_cache.items():
-                            # Skip souvenir items
                             if 'souvenir' in norm_name.lower():
                                 continue
-                            if norm_name not in mc._prices_cache:
-                                mc._prices_cache[norm_name] = []
-                            # Add DMarket lots that aren't already present (by price+float)
-                            existing = {(round(l[0], 2), round(l[1], 4) if l[1] is not None else None)
-                                        for l in mc._prices_cache[norm_name]}
-                            for lot in lots:
-                                # Skip souvenir lots
-                                if len(lot) > 3 and lot[3]:  # is_stattrak field used as marker
-                                    pass
-                                key = (round(lot[0], 2), round(lot[1], 4) if lot[1] is not None else None)
-                                if key not in existing:
-                                    mc._prices_cache[norm_name].append(lot)
-                                    existing.add(key)
+                            # Skip if market.csgo already has data for this skin
+                            if norm_name in mc._prices_cache and mc._prices_cache[norm_name]:
+                                continue
+                            mc._prices_cache[norm_name] = list(lots)
+                            added += 1
                     mc._reset_prefix_cache()
-                    logger.info('DMarket: merged %d skins into price cache', len(dm_cache))
+                    logger.info('DMarket: added %d skins with no market.csgo data', added)
                 except Exception as e:
                     logger.debug('DMarket load_all_prices failed: %s', e)
 
@@ -2710,8 +2722,20 @@ class PriceManager:
         strict_name_match: bool = False,
         allow_refresh: bool = True,
     ) -> Optional[float]:
-        # Get market.csgo liquidity-adjusted sell price as baseline
-        market_price = self.market_client.get_effective_sell_price(
+        """
+        Returns best avg sell price across market.csgo and DMarket.
+        Uses sales history (avg of recent sales) for both platforms.
+        market.csgo: uses built-in liquidity-adjusted price (includes sales history).
+        DMarket: uses avg of last 20 sales from trade-aggregator API.
+        Returns (best_price, source) — picks whichever platform gives higher net price.
+        """
+        mc_fee = float(self.market_client.market_fee if hasattr(self.market_client, 'market_fee') else 0.07)
+        dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
+        dm_min_sales = int(os.getenv('DMARKET_SELL_MIN_SALES', '3') or 3)
+        dm_max_ratio = float(os.getenv('DMARKET_SELL_MAX_RATIO', '1.5') or 1.5)
+
+        # ── market.csgo: liquidity-adjusted price (already uses sales history internally)
+        mc_price = self.market_client.get_effective_sell_price(
             skin_name,
             target_wear=target_wear,
             max_float=max_float,
@@ -2720,40 +2744,31 @@ class PriceManager:
             strict_name_match=strict_name_match,
             allow_refresh=allow_refresh,
         )
+        mc_net = float(mc_price) if mc_price is not None else None
 
-        # Check DMarket for better sell price, but only if liquidity is sufficient.
-        # Require at least DMARKET_SELL_MIN_LISTINGS lots and price within
-        # DMARKET_SELL_MAX_RATIO of market.csgo price to filter inflated listings.
+        # ── DMarket: avg of last 20 sales from trade-aggregator
+        dm_net = None
         if self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
             try:
-                dm_min_listings = int(os.getenv('DMARKET_SELL_MIN_LISTINGS', '3') or 3)
-                dm_max_ratio = float(os.getenv('DMARKET_SELL_MAX_RATIO', '2.0') or 2.0)
-                dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
-
-                dm_lots = self.dmarket_client.get_listings(
+                dm_sales = self.dmarket_client.get_last_sales(
                     skin_name,
                     target_wear=target_wear,
-                    max_float=max_float,
-                    exclude_stattrak=exclude_stattrak,
-                    require_stattrak=require_stattrak,
-                    limit=dm_min_listings + 5,
+                    limit=20,
                 )
-
-                if len(dm_lots) >= dm_min_listings:
-                    # Use median of top-N lots (more robust than cheapest single lot)
-                    prices = sorted([float(l[0]) for l in dm_lots[:dm_min_listings]])
-                    dm_median = prices[len(prices) // 2]
-                    dm_net = dm_median * (1.0 - dm_fee)
-
-                    if market_price is not None:
-                        # Only use DMarket if it's better AND within sanity ratio
-                        if dm_net > float(market_price) and dm_net <= float(market_price) * dm_max_ratio:
-                            return dm_net
+                if len(dm_sales) >= dm_min_sales:
+                    dm_avg = sum(dm_sales) / len(dm_sales)
+                    dm_net_candidate = dm_avg * (1.0 - dm_fee)
+                    # Sanity check: DMarket avg must not exceed market.csgo by more than ratio
+                    if mc_net is not None:
+                        if dm_net_candidate <= mc_net * dm_max_ratio:
+                            dm_net = dm_net_candidate
                     else:
-                        # No market.csgo data — use DMarket as fallback
-                        return dm_net
+                        dm_net = dm_net_candidate
             except Exception:
                 pass
 
-        return market_price
+        # Return best net price
+        if mc_net is not None and dm_net is not None:
+            return max(mc_net, dm_net)
+        return mc_net if mc_net is not None else dm_net
 

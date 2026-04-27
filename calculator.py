@@ -3739,14 +3739,13 @@ class ContractCalculator:
                     dmc = getattr(self.price_manager, 'dmarket_client', None)
                     if dmc and bool(getattr(dmc, 'enabled', False)):
                         try:
-                            dm_min = int(os.getenv('DMARKET_SELL_MIN_LISTINGS', '3') or 3)
-                            dm_lots = dmc.get_listings(skin_name, target_wear=wear,
-                                exclude_stattrak=not is_stattrak, require_stattrak=bool(is_stattrak), limit=dm_min+2)
-                            if len(dm_lots) >= dm_min:
-                                dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
-                                dm_prices = sorted([float(l[0]) for l in dm_lots[:dm_min]])
-                                dm_net = dm_prices[len(dm_prices)//2] * (1.0 - dm_fee)
-                                if abs(price - dm_net) < 0.05:
+                            dm_min = int(os.getenv('DMARKET_SELL_MIN_SALES', '3') or 3)
+                            dm_fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
+                            dm_sales = dmc.get_last_sales(skin_name, target_wear=wear, limit=20)
+                            if len(dm_sales) >= dm_min:
+                                dm_avg = sum(dm_sales) / len(dm_sales)
+                                dm_net = dm_avg * (1.0 - dm_fee)
+                                if abs(price - dm_net) < 1.0:  # within $1 tolerance
                                     sell_source = 'DMARKET'
                                     sell_fee = dm_fee
                         except Exception:

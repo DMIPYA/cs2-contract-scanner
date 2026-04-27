@@ -832,12 +832,6 @@ function onSortChange(val) {
   applyFilter();
 }
 
-function onSortChange(val) {
-  haptic('light');
-  state.sort = val;
-  applyFilter();
-}
-
 function sortContracts(list) {
   const s = state.sort;
   return [...list].sort((a, b) => {
