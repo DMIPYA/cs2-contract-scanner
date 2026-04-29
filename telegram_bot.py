@@ -668,6 +668,12 @@ def _render_details(*, svc: TargetHuntingService, mode: str, max_inv: Optional[f
             results.sort(key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
         except Exception:
             pass
+    if mode == 'SAFE' and results:
+        try:
+            results = list(results)
+            results.sort(key=lambda x: float(x.get('roi') or 0.0), reverse=True)
+        except Exception:
+            pass
 
     if idx <= 0 or idx > len(results):
         return "Contract not found (index out of range)."
@@ -823,6 +829,12 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         try:
             results = list(results)
             results.sort(key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
+        except Exception:
+            pass
+    if mode == 'SAFE' and results:
+        try:
+            results = list(results)
+            results.sort(key=lambda x: float(x.get('roi') or 0.0), reverse=True)
         except Exception:
             pass
 

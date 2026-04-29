@@ -474,6 +474,11 @@ async def api_contract_detail(
             results = sorted(results, key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
         except Exception:
             pass
+    if mode == 'SAFE' and results:
+        try:
+            results = sorted(results, key=lambda x: float(x.get('roi') or 0.0), reverse=True)
+        except Exception:
+            pass
 
     if idx > len(results):
         raise HTTPException(status_code=404, detail='Contract not found')
