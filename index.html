@@ -384,6 +384,7 @@ body {
 .input-right { text-align: right; flex-shrink: 0; }
 .input-price { font-size: 14px; font-weight: 600; color: var(--orange); }
 .input-float { font-size: 10px; color: var(--text4); margin-top: 2px; }
+.input-req { font-size: 10px; color: var(--green); margin-top: 2px; letter-spacing: .3px; }
 
 /* ── outcome items ── */
 .outcome-item {
@@ -1150,6 +1151,7 @@ function renderDetailFull(c) {
   <div class="input-info">
     <div class="input-name">${escHtml(g.name)}</div>
     <div class="input-wear">${wearLine}</div>
+    ${g.request_price != null ? `<div class="input-req">Request: $${fmt$(g.request_price)}</div>` : ''}
   </div>
   <div class="input-right">
     <div class="input-price">$${fmt$(g.total_price)} ${srcBadge(g.buy_source)}</div>

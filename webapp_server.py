@@ -310,6 +310,22 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         if mf is None:
             mf = _WEAR_MAX_FLOAT.get(g['wear'])
 
+        # Request price suggestion (market.csgo, best-effort)
+        request_price = None
+        try:
+            _svc = _get_svc()
+            _pm = getattr(_svc, 'price_manager', None)
+            if _pm is not None and g['buy_source'] != 'CSFLOAT':
+                _req = _pm.suggest_request_price(
+                    g['name'],
+                    target_wear=g['wear'] or None,
+                    require_stattrak=bool(c.get('is_stattrak')),
+                )
+                if _req and _req.get('suggested_price') is not None:
+                    request_price = round(float(_req['suggested_price']), 2)
+        except Exception:
+            pass
+
         input_groups.append({
             'start': start_i,
             'end': end_i,
@@ -324,6 +340,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
             'max_float_for_wear': round(mf, 4) if mf is not None else None,
             'buy_source': g['buy_source'],
             'individual_skins': g['individual_skins'],
+            'request_price': request_price,
         })
 
     # Outcomes

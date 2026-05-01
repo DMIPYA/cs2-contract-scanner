@@ -954,6 +954,26 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
             f"<b>{i:02d}.</b> <code>{st_short}</code> {cnt}x {html.escape(nm)} ({html.escape(wr_txt)}) | "
             f"{_fmt_money(total_price)}$ | {buy} {rng_txt}"
         )
+
+        # Request price suggestion from market.csgo order book
+        try:
+            pm = getattr(svc, 'price_manager', None)
+            if pm is not None and buy_source != 'CSFLOAT':
+                wear_for_req = wr_txt if wr_txt not in ('N/A', '') else None
+                req = pm.suggest_request_price(nm, target_wear=wear_for_req, require_stattrak=st)
+                if req and req.get('suggested_price') is not None:
+                    sp = float(req['suggested_price'])
+                    ba = float(req['best_ask'])
+                    sv_pct = float(req.get('savings_pct') or 0.0)
+                    median = req.get('sales_median')
+                    median_txt = f" median ${_fmt_money(median)}" if median is not None else ""
+                    lines.append(
+                        f"   Request: <b>${_fmt_money(sp)}</b> "
+                        f"(ask ${_fmt_money(ba)},{median_txt} save {sv_pct:.1f}%)"
+                    )
+        except Exception:
+            pass
+
         i += 1
 
     out_txt = "\n".join(lines)

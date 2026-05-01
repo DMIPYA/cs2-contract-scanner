@@ -1400,7 +1400,256 @@ class MarketCSGOClient:
             'total_lots_analyzed': self._total_lots_analyzed,
             'unique_skins': len(self._prices_cache)
         }
-    
+
+    def get_order_book(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[Dict]:
+        """
+        Fetch best ask and best bid for a skin.
+        - best_ask: from v2/prices/USD.json (already in _prices_cache) — real cheapest listing
+        - best_bid: from class_instance/USD.json — best buy order
+        Returns None if ask price not found.
+        """
+        st_prefix = 'StatTrak™ ' if bool(require_stattrak) else ''
+        if target_wear:
+            mhn = f"{st_prefix}{skin_name} ({target_wear})"
+        else:
+            mhn = f"{st_prefix}{skin_name}"
+
+        # ── best_ask from v2/prices cache (most accurate) ────────────────────
+        best_ask = None
+        try:
+            normalized = self._normalize_skin_name(mhn)
+            with self._prices_cache_lock:
+                lots = self._prices_cache.get(normalized)
+            if lots and target_wear:
+                # Filter to matching wear only
+                filtered = [float(l[0]) for l in lots if l[0] > 0 and str(l[2]) == target_wear]
+                if filtered:
+                    best_ask = min(filtered)
+            elif lots:
+                prices = sorted([float(l[0]) for l in lots if l[0] > 0])
+                if prices:
+                    best_ask = prices[0]
+        except Exception:
+            pass
+
+        # Fallback: load fresh from v2/prices if cache empty
+        if best_ask is None:
+            try:
+                v2 = self._load_prices_v2()
+                if v2:
+                    normalized = self._normalize_skin_name(mhn)
+                    lots = v2.get(normalized) or []
+                    if lots and target_wear:
+                        filtered = [float(l[0]) for l in lots if l[0] > 0 and str(l[2]) == target_wear]
+                        if filtered:
+                            best_ask = min(filtered)
+                    elif lots:
+                        prices = sorted([float(l[0]) for l in lots if l[0] > 0])
+                        if prices:
+                            best_ask = prices[0]
+            except Exception:
+                pass
+
+        if best_ask is None:
+            return None
+
+        # ── best_bid from class_instance ─────────────────────────────────────
+        best_bid = None
+        try:
+            ci_data = self._get_class_instance_prices()
+            if ci_data:
+                for entry in ci_data.values():
+                    if str(entry.get('market_hash_name') or '') == mhn:
+                        raw_bid = entry.get('buy_order')
+                        if raw_bid is not None:
+                            b = float(raw_bid)
+                            # Sanity: ignore bids < 1% of ask (stale/junk)
+                            if b > 0 and b >= best_ask * 0.01:
+                                best_bid = b
+                        break
+        except Exception:
+            pass
+
+        return {'best_ask': best_ask, 'best_bid': best_bid, 'currency': 'USD'}
+
+    def _get_class_instance_prices(self) -> Optional[Dict]:
+        """Load and cache /api/v2/prices/class_instance/USD.json (TTL 5 min)."""
+        now = time.time()
+        with self._prices_cache_lock:
+            cached_ts = getattr(self, '_ci_prices_ts', 0.0)
+            cached_data = getattr(self, '_ci_prices_data', None)
+            if cached_data is not None and (now - float(cached_ts)) < 300.0:
+                return cached_data
+
+        url = 'https://market.csgo.com/api/v2/prices/class_instance/USD.json'
+        data = self._request_json(url, timeout=30, retries=2)
+        if not isinstance(data, dict):
+            return None
+        items = data.get('items')
+        if not isinstance(items, dict) or not items:
+            return None
+
+        with self._prices_cache_lock:
+            self._ci_prices_data = items
+            self._ci_prices_ts = time.time()
+        return items
+
+    def suggest_request_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[Dict]:
+        """
+        Suggest an optimal buy-request price anchored to sales history median.
+
+        Core idea:
+          Sellers accept requests priced near what they've actually sold for recently.
+          Other buyers won't bother outbidding a non-round price with no obvious upside.
+          Result: filled quickly, meaningful discount vs ask, no bot-war incentive.
+
+        Algorithm:
+          1. Fetch sales history → compute median of last N sales (USD).
+          2. Fetch best_ask and best_bid from class_instance prices.
+          3. suggested = median * MC_REQUEST_MEDIAN_RATIO  (default 0.97)
+             — 3% below median: seller still gets a fair deal, buyer saves vs ask.
+          4. Hard caps:
+             a. suggested <= best_ask * MC_REQUEST_MAX_VS_ASK  (default 0.95, always cheaper)
+             b. suggested >= best_ask * MC_REQUEST_MIN_VS_ASK  (default 0.70, not insultingly low)
+          5. If no sales history: fall back to best_ask * MC_REQUEST_FALLBACK_RATIO (default 0.90).
+          6. If no ask price at all: return None.
+
+        Env vars:
+          MC_REQUEST_MEDIAN_RATIO    float  0.97   target % of sales median
+          MC_REQUEST_MAX_VS_ASK      float  0.95   hard ceiling vs ask
+          MC_REQUEST_MIN_VS_ASK      float  0.70   hard floor vs ask (don't lowball)
+          MC_REQUEST_FALLBACK_RATIO  float  0.90   ratio of ask when no history
+          MC_REQUEST_MIN_SALES       int    5      min sales needed to use median
+
+        Returns dict:
+          'suggested_price'  — float
+          'best_ask'         — float
+          'best_bid'         — float or None
+          'sales_median'     — float or None  (median of recent sales)
+          'sales_count'      — int            (number of sales used)
+          'savings_vs_ask'   — float
+          'savings_pct'      — float
+        Returns None if no ask price available.
+        """
+        # ── 1. Order book ────────────────────────────────────────────────────
+        book = self.get_order_book(skin_name, target_wear=target_wear, require_stattrak=require_stattrak)
+        if not book:
+            return None
+        best_ask = float(book['best_ask'])
+        best_bid = book.get('best_bid')
+
+        # ── 3. Config ────────────────────────────────────────────────────────
+        try:
+            median_ratio = float(os.getenv('MC_REQUEST_MEDIAN_RATIO', '0.97') or 0.97)
+        except Exception:
+            median_ratio = 0.97
+        try:
+            max_vs_ask = float(os.getenv('MC_REQUEST_MAX_VS_ASK', '0.95') or 0.95)
+        except Exception:
+            max_vs_ask = 0.95
+        try:
+            min_vs_ask = float(os.getenv('MC_REQUEST_MIN_VS_ASK', '0.70') or 0.70)
+        except Exception:
+            min_vs_ask = 0.70
+        try:
+            fallback_ratio = float(os.getenv('MC_REQUEST_FALLBACK_RATIO', '0.90') or 0.90)
+        except Exception:
+            fallback_ratio = 0.90
+        try:
+            min_sales = int(os.getenv('MC_REQUEST_MIN_SALES', '5') or 5)
+        except Exception:
+            min_sales = 5
+
+        # ── 2. Sales history median (USD) — 30d window, fallback 7d ─────────
+        sales_median = None
+        sales_count = 0
+        try:
+            hist_data = self.get_sales_history(
+                skin_name,
+                target_wear=target_wear,
+                require_stattrak=bool(require_stattrak),
+                allow_refresh=True,
+            )
+            if isinstance(hist_data, dict):
+                raw_hist = hist_data.get('history') or []
+                now_ts = time.time()
+                month_ago = now_ts - 30 * 24 * 3600
+                week_ago  = now_ts - 7  * 24 * 3600
+
+                prices_30d: List[float] = []
+                prices_7d:  List[float] = []
+                for entry in raw_hist:
+                    try:
+                        if isinstance(entry, (list, tuple)) and len(entry) >= 3:
+                            ts = float(entry[0])
+                            p  = float(entry[2])
+                            if p > 0:
+                                if ts >= month_ago:
+                                    prices_30d.append(p)
+                                if ts >= week_ago:
+                                    prices_7d.append(p)
+                    except Exception:
+                        continue
+
+                # Prefer 30d if enough sales, else 7d
+                if len(prices_30d) >= min_sales:
+                    prices_30d.sort()
+                    sales_median = float(prices_30d[len(prices_30d) // 2])
+                    sales_count  = len(prices_30d)
+                elif len(prices_7d) >= min_sales:
+                    prices_7d.sort()
+                    sales_median = float(prices_7d[len(prices_7d) // 2])
+                    sales_count  = len(prices_7d)
+        except Exception:
+            pass
+
+        # ── 4. Compute candidate ─────────────────────────────────────────────
+        if sales_median is not None and sales_count >= min_sales:
+            candidate = round(sales_median * median_ratio, 2)
+        else:
+            # No reliable history — fall back to ask ratio
+            candidate = round(best_ask * fallback_ratio, 2)
+            sales_median = None  # mark as unused
+
+        # Hard ceiling: always cheaper than ask
+        ceiling = round(best_ask * max_vs_ask, 2)
+        if candidate > ceiling:
+            candidate = ceiling
+
+        # Hard floor: don't lowball (seller won't accept)
+        floor = round(best_ask * min_vs_ask, 2)
+        if candidate < floor:
+            candidate = floor
+
+        if candidate <= 0:
+            return None
+
+        suggested = round(candidate, 2)
+        savings = round(best_ask - suggested, 2)
+        savings_pct = round(savings / best_ask * 100.0, 1) if best_ask > 0 else 0.0
+
+        return {
+            'suggested_price': suggested,
+            'best_ask': best_ask,
+            'best_bid': best_bid,
+            'sales_median': sales_median,
+            'sales_count': sales_count,
+            'savings_vs_ask': savings,
+            'savings_pct': savings_pct,
+        }
+
     def _load_mock_prices(self) -> bool:
         """Загрузка моковых цен для тестирования"""
         logger.warning("Используем моковые цены для тестирования")
@@ -2790,4 +3039,23 @@ class PriceManager:
         if mc_net is not None and dm_net is not None:
             return max(mc_net, dm_net)
         return mc_net if mc_net is not None else dm_net
+
+    def suggest_request_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[Dict]:
+        """
+        Suggest an optimal buy-request price for a skin on market.csgo.
+        Delegates to MarketCSGOClient.suggest_request_price.
+        Returns dict with suggested_price, best_ask, best_bid, savings_vs_ask, savings_pct, etc.
+        Returns None if order book is unavailable.
+        """
+        return self.market_client.suggest_request_price(
+            skin_name,
+            target_wear=target_wear,
+            require_stattrak=bool(require_stattrak),
+        )
 
