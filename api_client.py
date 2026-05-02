@@ -1650,6 +1650,58 @@ class MarketCSGOClient:
             'savings_pct': savings_pct,
         }
 
+    def suggest_sell_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[Dict]:
+        """
+        Suggest an instant-sell price on market.csgo — the price at which
+        a buyer will purchase the item immediately (best bid / buy order).
+        Only returned if bid is at least MC_SELL_MIN_BID_VS_ASK % of ask (default 70%).
+
+        Returns dict:
+          'instant_sell'   — float, best current buy order (what you get right now)
+          'best_ask'       — float, cheapest listing (for reference)
+          'fee_pct'        — float, market fee %
+          'net_receive'    — float, instant_sell * (1 - fee)
+          'vs_ask_pct'     — float, instant_sell as % of best_ask
+        Returns None if no buy orders exist or bid is too low.
+        """
+        book = self.get_order_book(skin_name, target_wear=target_wear, require_stattrak=require_stattrak)
+        if not book or book.get('best_bid') is None:
+            return None
+
+        best_bid = float(book['best_bid'])
+        best_ask = float(book['best_ask'])
+
+        try:
+            fee = float(os.getenv('MARKET_SELL_FEE', '0.07') or 0.07)
+        except Exception:
+            fee = 0.07
+        try:
+            min_bid_ratio = float(os.getenv('MC_SELL_MIN_BID_VS_ASK', '0.70') or 0.70)
+        except Exception:
+            min_bid_ratio = 0.70
+
+        vs_ask_pct = round(best_bid / best_ask * 100.0, 1) if best_ask > 0 else 0.0
+
+        # Skip stale/junk bids that are too far below ask
+        if best_ask > 0 and best_bid < best_ask * min_bid_ratio:
+            return None
+
+        net = round(best_bid * (1.0 - fee), 2)
+
+        return {
+            'instant_sell': round(best_bid, 2),
+            'best_ask': round(best_ask, 2),
+            'fee_pct': round(fee * 100.0, 1),
+            'net_receive': net,
+            'vs_ask_pct': vs_ask_pct,
+        }
+
     def _load_mock_prices(self) -> bool:
         """Загрузка моковых цен для тестирования"""
         logger.warning("Используем моковые цены для тестирования")
@@ -2289,6 +2341,203 @@ class DMarketClient:
                         pass
 
         return result
+
+    def get_order_book(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[Dict]:
+        """
+        Fetch best ask (offerBestPrice) and best bid (orderBestPrice) from DMarket
+        aggregated-prices endpoint.
+        Returns {'best_ask': float, 'best_bid': float|None, 'currency': 'USD'} or None.
+        Prices in API are in cents — converted to USD here.
+        """
+        if not self.enabled or not self._signing_available:
+            return None
+
+        st_prefix = 'StatTrak\u2122 ' if bool(require_stattrak) else ''
+        if target_wear:
+            title = f'{st_prefix}{skin_name} ({target_wear})'
+        else:
+            title = f'{st_prefix}{skin_name}'
+
+        data = self._post('/marketplace-api/v1/aggregated-prices', {
+            'filter': {'game': self.GAME_ID, 'titles': [title]},
+            'limit': '1',
+        })
+        if not data:
+            return None
+
+        for item in data.get('aggregatedPrices') or []:
+            if str(item.get('title') or '') != title:
+                continue
+            try:
+                offer = item.get('offerBestPrice') or {}
+                order = item.get('orderBestPrice') or {}
+                ask_cents = offer.get('Amount') or offer.get('USD')
+                bid_cents = order.get('Amount') or order.get('USD')
+                best_ask = float(ask_cents) / 100.0 if ask_cents is not None else None
+                best_bid = float(bid_cents) / 100.0 if bid_cents is not None else None
+                if best_ask is None:
+                    return None
+                # Sanity: ignore bids < 1% of ask
+                if best_bid is not None and best_bid < best_ask * 0.01:
+                    best_bid = None
+                return {'best_ask': best_ask, 'best_bid': best_bid, 'currency': 'USD'}
+            except Exception:
+                return None
+
+        return None
+
+    def suggest_request_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[Dict]:
+        """
+        Suggest an optimal buy-order (target order) price on DMarket.
+        Uses the same median-based strategy as MarketCSGOClient.suggest_request_price:
+          - Anchor: median of last N sales from get_last_sales
+          - suggested = median * MC_REQUEST_MEDIAN_RATIO (default 0.97)
+          - Hard ceiling: best_ask * MC_REQUEST_MAX_VS_ASK (default 0.95)
+          - Hard floor:   best_ask * MC_REQUEST_MIN_VS_ASK (default 0.70)
+          - Fallback (no history): best_ask * MC_REQUEST_FALLBACK_RATIO (default 0.90)
+
+        Returns dict with suggested_price, best_ask, best_bid, sales_median,
+        savings_vs_ask, savings_pct — or None if unavailable.
+        """
+        book = self.get_order_book(skin_name, target_wear=target_wear, require_stattrak=require_stattrak)
+        if not book:
+            return None
+        best_ask = float(book['best_ask'])
+        best_bid = book.get('best_bid')
+
+        # Sales history median from last_sales
+        sales_median = None
+        sales_count = 0
+        try:
+            min_sales = int(os.getenv('MC_REQUEST_MIN_SALES', '5') or 5)
+        except Exception:
+            min_sales = 5
+        try:
+            # get_last_sales uses title directly — prepend StatTrak™ if needed
+            st_prefix = 'StatTrak\u2122 ' if bool(require_stattrak) else ''
+            sales_skin_name = f'{st_prefix}{skin_name}'
+            sales = self.get_last_sales(sales_skin_name, target_wear=target_wear, limit=50)
+            if sales and len(sales) >= min_sales:
+                s = sorted(sales)
+                sales_median = float(s[len(s) // 2])
+                sales_count = len(s)
+        except Exception:
+            pass
+
+        # Config (shared with MC)
+        try:
+            median_ratio = float(os.getenv('MC_REQUEST_MEDIAN_RATIO', '0.97') or 0.97)
+        except Exception:
+            median_ratio = 0.97
+        try:
+            max_vs_ask = float(os.getenv('MC_REQUEST_MAX_VS_ASK', '0.95') or 0.95)
+        except Exception:
+            max_vs_ask = 0.95
+        try:
+            min_vs_ask = float(os.getenv('MC_REQUEST_MIN_VS_ASK', '0.70') or 0.70)
+        except Exception:
+            min_vs_ask = 0.70
+        try:
+            fallback_ratio = float(os.getenv('MC_REQUEST_FALLBACK_RATIO', '0.90') or 0.90)
+        except Exception:
+            fallback_ratio = 0.90
+
+        if sales_median is not None and sales_count >= min_sales:
+            candidate = round(sales_median * median_ratio, 2)
+        else:
+            candidate = round(best_ask * fallback_ratio, 2)
+            sales_median = None
+
+        # Hard ceiling
+        ceiling = round(best_ask * max_vs_ask, 2)
+        if candidate > ceiling:
+            candidate = ceiling
+
+        # Hard floor
+        floor = round(best_ask * min_vs_ask, 2)
+        if candidate < floor:
+            candidate = floor
+
+        if candidate <= 0:
+            return None
+
+        suggested = round(candidate, 2)
+        savings = round(best_ask - suggested, 2)
+        savings_pct = round(savings / best_ask * 100.0, 1) if best_ask > 0 else 0.0
+
+        return {
+            'suggested_price': suggested,
+            'best_ask': best_ask,
+            'best_bid': best_bid,
+            'sales_median': sales_median,
+            'sales_count': sales_count,
+            'savings_vs_ask': savings,
+            'savings_pct': savings_pct,
+        }
+
+    def suggest_sell_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[Dict]:
+        """
+        Suggest an instant-sell price on DMarket — the best target order
+        (orderBestPrice) that will fill immediately.
+        Only returned if bid >= DM_SELL_MIN_BID_VS_ASK % of ask (default 70%).
+
+        Returns dict:
+          'instant_sell'  — float, best current buy order (USD)
+          'best_ask'      — float, cheapest listing (for reference)
+          'fee_pct'       — float, DMarket fee %
+          'net_receive'   — float, instant_sell * (1 - fee)
+          'vs_ask_pct'    — float, instant_sell as % of best_ask
+        Returns None if no buy orders exist or bid is too low.
+        """
+        book = self.get_order_book(skin_name, target_wear=target_wear, require_stattrak=require_stattrak)
+        if not book or book.get('best_bid') is None:
+            return None
+
+        best_bid = float(book['best_bid'])
+        best_ask = float(book['best_ask'])
+
+        try:
+            fee = float(os.getenv('DMARKET_SELL_FEE', '0.05') or 0.05)
+        except Exception:
+            fee = 0.05
+        try:
+            min_bid_ratio = float(os.getenv('MC_SELL_MIN_BID_VS_ASK', '0.70') or 0.70)
+        except Exception:
+            min_bid_ratio = 0.70
+
+        vs_ask_pct = round(best_bid / best_ask * 100.0, 1) if best_ask > 0 else 0.0
+
+        # Skip stale/junk bids
+        if best_ask > 0 and best_bid < best_ask * min_bid_ratio:
+            return None
+
+        net = round(best_bid * (1.0 - fee), 2)
+
+        return {
+            'instant_sell': round(best_bid, 2),
+            'best_ask': round(best_ask, 2),
+            'fee_pct': round(fee * 100.0, 1),
+            'net_receive': net,
+            'vs_ask_pct': vs_ask_pct,
+        }
 
     def get_listings(
         self,
@@ -3046,14 +3295,51 @@ class PriceManager:
         *,
         target_wear: Optional[str] = None,
         require_stattrak: bool = False,
+        buy_source: Optional[str] = None,
     ) -> Optional[Dict]:
         """
-        Suggest an optimal buy-request price for a skin on market.csgo.
-        Delegates to MarketCSGOClient.suggest_request_price.
-        Returns dict with suggested_price, best_ask, best_bid, savings_vs_ask, savings_pct, etc.
-        Returns None if order book is unavailable.
+        Suggest an optimal buy-request price for a skin.
+        Routes to the correct market client based on buy_source:
+          - 'DMARKET' → DMarketClient.suggest_request_price (uses DM order book + sales)
+          - anything else → MarketCSGOClient.suggest_request_price (uses MC order book + sales)
+        Returns None if data unavailable.
         """
+        src = str(buy_source or 'MARKETCSGO').strip().upper()
+        if src == 'DMARKET' and self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
+            return self.dmarket_client.suggest_request_price(
+                skin_name,
+                target_wear=target_wear,
+                require_stattrak=bool(require_stattrak),
+            )
         return self.market_client.suggest_request_price(
+            skin_name,
+            target_wear=target_wear,
+            require_stattrak=bool(require_stattrak),
+        )
+
+    def suggest_sell_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+        sell_source: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """
+        Suggest an instant-sell price for an outcome skin.
+        Routes to the correct market client based on sell_source:
+          - 'DMARKET' → DMarketClient.suggest_sell_price
+          - anything else → MarketCSGOClient.suggest_sell_price
+        Returns None if no buy orders available.
+        """
+        src = str(sell_source or 'MARKETCSGO').strip().upper()
+        if src == 'DMARKET' and self.dmarket_client and bool(getattr(self.dmarket_client, 'enabled', False)):
+            return self.dmarket_client.suggest_sell_price(
+                skin_name,
+                target_wear=target_wear,
+                require_stattrak=bool(require_stattrak),
+            )
+        return self.market_client.suggest_sell_price(
             skin_name,
             target_wear=target_wear,
             require_stattrak=bool(require_stattrak),

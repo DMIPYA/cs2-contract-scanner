@@ -732,6 +732,8 @@ class ContractCalculator:
                 d['float'] = float(lot_float)
                 d['wear'] = str(wear)
                 d['instance_key'] = f"{name}|{float(price):.4f}|{float(lot_float):.5f}|{wear}"
+                if not d.get('buy_source'):
+                    d['buy_source'] = 'MARKETCSGO'
                 expanded.append(d)
         return expanded[: int(limit)]
 
@@ -2027,12 +2029,28 @@ class ContractCalculator:
             _liq_min_depth = 30
         # How many listings to request per skin (must be > min_depth to detect shortfall).
         _liq_fetch_limit = max(int(_liq_min_depth) + 20, 60)
+        # Hard timeout for the entire refine pass to prevent infinite hangs.
+        # Configurable via HUNT_REFINE_TIMEOUT_S (default 120s).
+        try:
+            _refine_timeout = float(os.getenv('HUNT_REFINE_TIMEOUT_S', '120') or 120)
+        except Exception:
+            _refine_timeout = 120.0
+        _refine_start = time.time()
         try:
             try:
                 self.clear_price_memoization()
             except Exception:
                 pass
-            for r in refine_slice:
+            for _refine_i, r in enumerate(refine_slice):
+                if time.time() - _refine_start > _refine_timeout:
+                    self._logger.warning(
+                        'Refine timeout after %.1fs at contract %d/%d — using partial results',
+                        time.time() - _refine_start, _refine_i, k,
+                    )
+                    refined.extend(refine_slice[_refine_i:])
+                    break
+                if _refine_i > 0 and _refine_i % 20 == 0:
+                    self._logger.info('Refine progress: %d/%d (%.1fs)', _refine_i, k, time.time() - _refine_start)
                 try:
                     contract_skins = list(r.get('input_skins') or [])
                     target_collection = str(r.get('target_collection') or '')
@@ -2366,7 +2384,12 @@ class ContractCalculator:
         target_min_avg_norm = 0.0
 
         try:
-            outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)
+            _prev_msnp = self._multisource_net_pricing
+            self._multisource_net_pricing = False
+            try:
+                outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)
+            finally:
+                self._multisource_net_pricing = _prev_msnp
             if outcomes:
                 for o in outcomes:
                     if o.get('wear') != target_wear:
@@ -2597,7 +2620,12 @@ class ContractCalculator:
         }
         target_max_avg_norm = float(wear_thresholds.get(target_wear, 0.07))
         current_skins = [dict(s) for s in contract_skins]
-        outcomes = self.calculate_contract_outcomes_details(current_skins, is_stattrak=is_stattrak)
+        _prev_msnp2 = self._multisource_net_pricing
+        self._multisource_net_pricing = False
+        try:
+            outcomes = self.calculate_contract_outcomes_details(current_skins, is_stattrak=is_stattrak)
+        finally:
+            self._multisource_net_pricing = _prev_msnp2
         if not outcomes:
             return None
         # Find bottleneck outcome вЂ” the one that constrains avg_norm the most
@@ -3505,7 +3533,8 @@ class ContractCalculator:
                     'price': price,
                     'float': skin_float,
                     'wear': wear,
-                    'rarity': self._normalize_rarity(skin.rarity)
+                    'rarity': self._normalize_rarity(skin.rarity),
+                    'buy_source': 'MARKETCSGO',
                 })
 
         priced_skins.sort(key=lambda x: x['price'])

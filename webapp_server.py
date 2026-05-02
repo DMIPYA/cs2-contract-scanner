@@ -310,7 +310,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         if mf is None:
             mf = _WEAR_MAX_FLOAT.get(g['wear'])
 
-        # Request price suggestion (market.csgo, best-effort)
+        # Request price suggestion (best-effort)
         request_price = None
         try:
             _svc = _get_svc()
@@ -320,6 +320,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                     g['name'],
                     target_wear=g['wear'] or None,
                     require_stattrak=bool(c.get('is_stattrak')),
+                    buy_source=g['buy_source'],
                 )
                 if _req and _req.get('suggested_price') is not None:
                     request_price = round(float(_req['suggested_price']), 2)
@@ -348,13 +349,33 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
     outcomes = []
     for o in raw_outs:
         wr = str(o.get('wear') or '')
+        sell_src = str(o.get('sell_source') or 'MARKETCSGO')
+
+        # Instant-sell price (best bid on the market)
+        instant_sell = None
+        try:
+            _svc2 = _get_svc()
+            _pm2 = getattr(_svc2, 'price_manager', None)
+            if _pm2 is not None:
+                _sr = _pm2.suggest_sell_price(
+                    str(o.get('name') or ''),
+                    target_wear=wr or None,
+                    require_stattrak=bool(c.get('is_stattrak')),
+                    sell_source=sell_src,
+                )
+                if _sr and _sr.get('instant_sell') is not None:
+                    instant_sell = round(float(_sr['instant_sell']), 2)
+        except Exception:
+            pass
+
         outcomes.append({
             'name': str(o.get('name') or ''),
             'price': round(float(o.get('price') or 0.0), 2),
             'probability': round(float(o.get('probability') or 0.0) * 100.0, 2),
             'wear': wr,
             'wear_abbr': _WEAR_ABBR.get(wr, wr[:2].upper() if wr else '?'),
-            'sell_source': str(o.get('sell_source') or 'MARKETCSGO'),
+            'sell_source': sell_src,
+            'instant_sell': instant_sell,
         })
 
     core = f"{int(c.get('main_skins_count') or 0)}/{int(c.get('filler_skins_count') or 0)}"

@@ -400,6 +400,7 @@ body {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .outcome-prob { font-size: 10px; color: var(--text4); margin-top: 2px; letter-spacing: .3px; }
+.outcome-sell { font-size: 10px; color: var(--green); margin-top: 2px; letter-spacing: .3px; }
 .outcome-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; margin-left: 8px; }
 .outcome-price { font-size: 15px; font-weight: 600; color: var(--orange); }
 .wear-tag {
@@ -1178,6 +1179,7 @@ function renderDetailFull(c) {
   <div class="outcome-left">
     <div class="outcome-name">${escHtml(o.name)}</div>
     <div class="outcome-prob">${prob.toFixed(2)}% chance · ${escHtml(o.wear)}</div>
+    ${o.instant_sell != null ? `<div class="outcome-sell">Sell now: $${fmt$(o.instant_sell)}</div>` : ""}
   </div>
   <div class="outcome-right">
     <div class="outcome-price">$${fmt$(o.price)} ${srcBadge(o.sell_source)}</div>
@@ -1209,9 +1211,9 @@ function marketUrl(name, wear, isStattrak, source) {
 }
 
 function srcBadge(source) {
-  if (!source) return '';
+  const src = (source || 'MARKETCSGO').toUpperCase();
   const m = {'MARKETCSGO':'MC','DMARKET':'DM','CSFLOAT':'CF'};
-  const label = m[source];
+  const label = m[src];
   if (!label) return '';
   return `<span style="font-size:8px;color:var(--text4);letter-spacing:.5px">${label}</span>`;
 }

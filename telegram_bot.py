@@ -955,12 +955,13 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
             f"{_fmt_money(total_price)}$ | {buy} {rng_txt}"
         )
 
-        # Request price suggestion from market.csgo order book
+        # Request price suggestion from order book
         try:
             pm = getattr(svc, 'price_manager', None)
             if pm is not None and buy_source != 'CSFLOAT':
                 wear_for_req = wr_txt if wr_txt not in ('N/A', '') else None
-                req = pm.suggest_request_price(nm, target_wear=wear_for_req, require_stattrak=st)
+                req = pm.suggest_request_price(nm, target_wear=wear_for_req,
+                                               require_stattrak=st, buy_source=buy_source)
                 if req and req.get('suggested_price') is not None:
                     sp = float(req['suggested_price'])
                     ba = float(req['best_ask'])
