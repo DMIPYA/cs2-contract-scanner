@@ -371,6 +371,10 @@ def _normalize_mode(mode: str) -> str:
     raw = raw.replace('_', '-').replace(' ', '')
     if raw in {'HIGH-RISK', 'HIGHRISK', 'RISK'}:
         return 'RISK'
+    if raw == 'SAFE':
+        return 'SAFE'
+    if raw == 'BID':
+        return 'BID'
     return 'PROFIT'
 
 
@@ -594,6 +598,12 @@ def _render_list(*, svc: TargetHuntingService, mode: str, max_inv: Optional[floa
             results.sort(key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
         except Exception:
             pass
+    if mode in ('SAFE', 'BID') and results:
+        try:
+            results = list(results)
+            results.sort(key=lambda x: float(x.get('roi') or 0.0), reverse=True)
+        except Exception:
+            pass
 
     now = time.time()
     ts = float(meta.get('timestamp') or 0.0)
@@ -668,7 +678,7 @@ def _render_details(*, svc: TargetHuntingService, mode: str, max_inv: Optional[f
             results.sort(key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
         except Exception:
             pass
-    if mode == 'SAFE' and results:
+    if mode in ('SAFE', 'BID') and results:
         try:
             results = list(results)
             results.sort(key=lambda x: float(x.get('roi') or 0.0), reverse=True)
@@ -831,7 +841,7 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
             results.sort(key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
         except Exception:
             pass
-    if mode == 'SAFE' and results:
+    if mode in ('SAFE', 'BID') and results:
         try:
             results = list(results)
             results.sort(key=lambda x: float(x.get('roi') or 0.0), reverse=True)

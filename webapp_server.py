@@ -101,6 +101,8 @@ def _normalize_mode(mode: str) -> str:
     raw = str(mode or 'PROFIT').strip().upper().replace('_', '-').replace(' ', '')
     if raw in {'SAFE'}:
         return 'SAFE'
+    if raw in {'BID'}:
+        return 'BID'
     return 'RISK' if raw in {'HIGH-RISK', 'HIGHRISK', 'RISK'} else 'PROFIT'
 
 
@@ -243,18 +245,19 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                         else:
                             max_allowed_wear = 'Battle-Scarred'
 
-    # Group inputs by (name, wear, float_rounded, collection)
-    # Float rounded to 4 decimal places — skins with different floats shown separately
+    # Group inputs by (name, wear, buy_source, collection)
+    # Skins with same name/wear/source are merged regardless of individual float values.
+    # Float is shown as average across the group.
     from collections import OrderedDict
     groups: OrderedDict = OrderedDict()
     for s in ins:
         nm = str(s.get('name') or '')
         wr = str(s.get('wear') or '')
         coll = str(s.get('collection') or '')
+        src = str(s.get('buy_source') or 'MARKETCSGO')
         fl = s.get('float')
         fl_val = float(fl) if fl is not None else None
-        fl_rounded = round(fl_val, 4) if fl_val is not None else None
-        key = (nm, wr, fl_rounded, coll)
+        key = (nm, wr, src, coll)
         g = groups.get(key)
         if g is None:
             g = {
@@ -266,7 +269,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
                 'total_price': 0.0,
                 'floats': [],
                 'max_float_for_wear': s.get('max_float_for_wear'),
-                'buy_source': str(s.get('buy_source') or ''),
+                'buy_source': src,
                 'individual_skins': [],
             }
             groups[key] = g
@@ -448,8 +451,8 @@ async def api_contracts(
             results = sorted(results, key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
         except Exception:
             pass
-    # Sort SAFE mode by ROI descending (all guaranteed profitable)
-    if mode == 'SAFE' and results:
+    # Sort SAFE and BID modes by ROI descending
+    if mode in ('SAFE', 'BID') and results:
         try:
             results = sorted(results, key=lambda x: float(x.get('roi') or 0.0), reverse=True)
         except Exception:
@@ -512,7 +515,7 @@ async def api_contract_detail(
             results = sorted(results, key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
         except Exception:
             pass
-    if mode == 'SAFE' and results:
+    if mode in ('SAFE', 'BID') and results:
         try:
             results = sorted(results, key=lambda x: float(x.get('roi') or 0.0), reverse=True)
         except Exception:

@@ -105,6 +105,8 @@ class TargetHuntingService:
         raw = raw.replace('_', '-').replace(' ', '')
         if raw in {'SAFE'}:
             return ('SAFE', 'SAFE')
+        if raw in {'BID'}:
+            return ('BID', 'BID')
         return ('PROFIT', 'PROFIT')
 
     def _compute_results_part(self, *, calc_mode: str, is_stattrak: bool) -> List[Dict]:
@@ -113,6 +115,10 @@ class TargetHuntingService:
 
         part_start = time.time()
         err: Optional[Exception] = None
+
+        # BID mode: run PROFIT + SAFE with bid prices, then merge
+        if calc_mode == 'BID':
+            return self._compute_bid_results_part(is_stattrak=is_stattrak)
 
         try:
             max_results = int(os.getenv('HUNT_MAX_RESULTS', '200') or 200)
@@ -235,6 +241,75 @@ class TargetHuntingService:
             except Exception:
                 logger.debug('Mode=%s: failed to collect 0-items diagnostics', str(calc_mode))
         return part_list
+
+    def _compute_bid_results_part(self, *, is_stattrak: bool) -> List[Dict]:
+        """
+        Compute contracts in BID mode:
+        1. Load bid prices from market.csgo class_instance data.
+        2. Enable _bid_mode on calculator so _get_main_skins / _expand_items use bid prices.
+        3. Run PROFIT + SAFE computation with bid prices.
+        4. Merge, deduplicate by (collection, target_skin, is_stattrak), keep best ROI.
+        5. Mark each contract with bid_mode=True and store ask_input_cost for comparison.
+        """
+        if not self.calculator:
+            return []
+
+        pm = getattr(self, 'price_manager', None)
+        if pm is None:
+            return []
+
+        # Load bid prices
+        try:
+            ok = pm.load_bid_prices()
+            if not ok:
+                logger.warning('BID mode: failed to load bid prices, falling back to ask')
+        except Exception:
+            logger.debug('BID mode: load_bid_prices failed', exc_info=True)
+
+        # Enable bid mode on calculator
+        self.calculator._bid_mode = True
+        # Clear memos so bid prices are used fresh
+        try:
+            self.calculator.clear_price_memoization()
+        except Exception:
+            pass
+
+        try:
+            all_results: List[Dict] = []
+            for sub_mode in ('PROFIT', 'SAFE'):
+                try:
+                    part = self._compute_results_part(calc_mode=sub_mode, is_stattrak=is_stattrak)
+                    for r in part:
+                        r['bid_mode'] = True
+                        r['bid_sub_mode'] = sub_mode
+                    all_results.extend(part)
+                except Exception:
+                    logger.debug('BID mode: sub_mode=%s failed', sub_mode, exc_info=True)
+
+            # Deduplicate: keep best ROI per (collection, target_skin, is_stattrak)
+            seen: dict = {}
+            deduped: List[Dict] = []
+            for r in all_results:
+                key = (
+                    str(r.get('target_collection') or ''),
+                    str(r.get('hunt_output') or ''),
+                    bool(r.get('is_stattrak')),
+                )
+                existing = seen.get(key)
+                if existing is None or float(r.get('roi') or 0.0) > float(existing.get('roi') or 0.0):
+                    seen[key] = r
+            deduped = list(seen.values())
+
+            logger.info('BID mode: %d contracts (%s)', len(deduped), 'ST' if is_stattrak else 'NO')
+            return deduped
+
+        finally:
+            # Always restore ask mode and clear bid memos
+            self.calculator._bid_mode = False
+            try:
+                self.calculator.clear_price_memoization()
+            except Exception:
+                pass
 
     def _compute_results_deep(self, *, calc_mode: str) -> List[Dict]:
         if not self.calculator:
@@ -530,7 +605,7 @@ class TargetHuntingService:
         def _worker():
             refresh_after_seconds = 3 * 60 * 60
             check_every_seconds = 10
-            modes = ['PROFIT', 'SAFE']
+            modes = ['PROFIT', 'SAFE', 'BID']
 
             while not self._stop.is_set():
                 now = time.time()

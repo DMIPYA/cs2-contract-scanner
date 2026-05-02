@@ -2868,6 +2868,12 @@ class PriceManager:
         self.market_client = MarketCSGOClient()
         self.csfloat_client = CSFloatClient()
         self.dmarket_client = DMarketClient()
+        # BID mode: {normalized_name: {wear: bid_price_usd}}
+        # Populated by load_bid_prices(). Used by calculator in BID mode.
+        self._bid_prices: Dict[str, Dict[str, float]] = {}
+        self._bid_prices_lock = threading.RLock()
+        self._bid_prices_ts: float = 0.0
+        self._bid_prices_ttl: float = 300.0  # 5 min
     
     def initialize(self) -> bool:
         """Инициализация с быстрым стартом.
@@ -3288,6 +3294,97 @@ class PriceManager:
         if mc_net is not None and dm_net is not None:
             return max(mc_net, dm_net)
         return mc_net if mc_net is not None else dm_net
+
+    def load_bid_prices(self, force: bool = False) -> bool:
+        """
+        Load best buy-order prices from market.csgo class_instance/USD.json.
+        Builds {normalized_name: {wear: bid_price}} for use in BID mode.
+        Returns True if data was loaded successfully.
+        """
+        now = time.time()
+        with self._bid_prices_lock:
+            if not force and self._bid_prices and (now - self._bid_prices_ts) < self._bid_prices_ttl:
+                return True
+
+        ci_data = self.market_client._get_class_instance_prices()
+        if not ci_data:
+            return False
+
+        try:
+            min_bid_ratio = float(os.getenv('MC_SELL_MIN_BID_VS_ASK', '0.70') or 0.70)
+        except Exception:
+            min_bid_ratio = 0.70
+
+        _WEAR_FLOAT_MAX = {
+            'Factory New': 0.07, 'Minimal Wear': 0.15,
+            'Field-Tested': 0.38, 'Well-Worn': 0.45, 'Battle-Scarred': 1.0,
+        }
+
+        new_bids: Dict[str, Dict[str, float]] = {}
+        for entry in ci_data.values():
+            mhn = str(entry.get('market_hash_name') or '')
+            if not mhn:
+                continue
+            raw_bid = entry.get('buy_order')
+            raw_ask = entry.get('price')
+            if raw_bid is None or raw_ask is None:
+                continue
+            try:
+                bid = float(raw_bid)
+                ask = float(raw_ask)
+            except Exception:
+                continue
+            if bid <= 0 or ask <= 0:
+                continue
+            if bid < ask * min_bid_ratio:
+                continue
+            wear = None
+            for w in _WEAR_FLOAT_MAX:
+                if mhn.endswith(f'({w})'):
+                    wear = w
+                    break
+            if not wear:
+                continue
+            norm = self.market_client._normalize_skin_name(mhn)
+            if not norm:
+                continue
+            if norm not in new_bids:
+                new_bids[norm] = {}
+            new_bids[norm][wear] = bid
+
+        with self._bid_prices_lock:
+            self._bid_prices = new_bids
+            self._bid_prices_ts = time.time()
+
+        logger.info('BID prices loaded: %d skins with valid buy orders', len(new_bids))
+        return bool(new_bids)
+
+    def get_bid_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[float]:
+        """
+        Return best buy-order price for a skin in BID mode.
+        Returns None if no valid bid exists (use ask price as fallback).
+        """
+        st_prefix = 'StatTrak\u2122 ' if bool(require_stattrak) else ''
+        if target_wear:
+            mhn = f'{st_prefix}{skin_name} ({target_wear})'
+        else:
+            mhn = f'{st_prefix}{skin_name}'
+        norm = self.market_client._normalize_skin_name(mhn)
+        with self._bid_prices_lock:
+            wears = self._bid_prices.get(norm)
+        if not wears:
+            return None
+        if target_wear and target_wear in wears:
+            return wears[target_wear]
+        if wears:
+            return min(wears.values())
+        return None
 
     def suggest_request_price(
         self,

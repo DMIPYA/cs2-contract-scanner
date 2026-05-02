@@ -89,6 +89,9 @@ class ContractCalculator:
         self._memo_listings: Dict[Tuple, List[Tuple[float, Optional[float], str]]] = {}
         self._memo_effective_sell_price: Dict[Tuple, Optional[float]] = {}
         self._memo_max_input_float: Dict[Tuple[str, str], Optional[float]] = {}  # NEW: Cache for max input float calculations
+        # BID mode: when True, _get_main_skins and _expand_items_with_unique_listings
+        # substitute ask prices with bid prices (buy orders) where available.
+        self._bid_mode: bool = False
 
     def get_last_target_suite_diagnostics(self) -> Optional[Dict]:
 
@@ -734,6 +737,16 @@ class ContractCalculator:
                 d['instance_key'] = f"{name}|{float(price):.4f}|{float(lot_float):.5f}|{wear}"
                 if not d.get('buy_source'):
                     d['buy_source'] = 'MARKETCSGO'
+                # BID mode: override price with buy-order price if available
+                if self._bid_mode:
+                    bid_p = self.price_manager.get_bid_price(
+                        str(name), target_wear=str(wear),
+                        require_stattrak=bool(it.get('rarity', '').startswith('ST') if False else False),
+                    )
+                    if bid_p is not None and bid_p > 0:
+                        d['price'] = float(bid_p)
+                        d['buy_source'] = 'MARKETCSGO_BID'
+                        d['instance_key'] = f"{name}|bid{float(bid_p):.4f}|{float(lot_float):.5f}|{wear}"
                 expanded.append(d)
         return expanded[: int(limit)]
 
@@ -3527,6 +3540,16 @@ class ContractCalculator:
             if max_float is not None and float(skin_float) > float(max_float):
                 continue
             if price and price > 0:
+                # BID mode: substitute ask price with buy-order price if available
+                buy_src = 'MARKETCSGO'
+                if self._bid_mode:
+                    bid_p = self.price_manager.get_bid_price(
+                        skin.name, target_wear=wear,
+                        require_stattrak=bool(is_stattrak),
+                    )
+                    if bid_p is not None and bid_p > 0:
+                        price = bid_p
+                        buy_src = 'MARKETCSGO_BID'
                 priced_skins.append({
                     'name': skin.name,
                     'collection': collection,
@@ -3534,7 +3557,7 @@ class ContractCalculator:
                     'float': skin_float,
                     'wear': wear,
                     'rarity': self._normalize_rarity(skin.rarity),
-                    'buy_source': 'MARKETCSGO',
+                    'buy_source': buy_src,
                 })
 
         priced_skins.sort(key=lambda x: x['price'])
