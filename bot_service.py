@@ -242,103 +242,77 @@ class TargetHuntingService:
                 logger.debug('Mode=%s: failed to collect 0-items diagnostics', str(calc_mode))
         return part_list
 
-    def _compute_bid_results_part(self, *, is_stattrak: bool) -> List[Dict]:
+    def _compute_bid_results_all(self) -> List[Dict]:
         """
-        Compute contracts in BID mode:
-        1. Load bid prices from market.csgo class_instance data.
-        2. Enable _bid_mode on calculator so _get_main_skins / _expand_items use bid prices.
-        3. Run PROFIT + SAFE computation with bid prices.
-        4. Merge, deduplicate by (collection, target_skin, is_stattrak), keep best ROI.
-        5. Mark each contract with bid_mode=True and store ask_input_cost for comparison.
+        Compute BID mode contracts for both ST and non-ST in one pass.
+        Enables bid_mode once, shares memoization across all sub-computations,
+        clears memos only at the end.
         """
         if not self.calculator:
             return []
 
         pm = getattr(self, 'price_manager', None)
-        if pm is None:
-            return []
+        if pm is not None:
+            try:
+                pm.load_bid_prices()
+            except Exception:
+                logger.debug('BID: load_bid_prices failed', exc_info=True)
 
-        # Load bid prices
-        try:
-            ok = pm.load_bid_prices()
-            if not ok:
-                logger.warning('BID mode: failed to load bid prices, falling back to ask')
-        except Exception:
-            logger.debug('BID mode: load_bid_prices failed', exc_info=True)
-
-        # Enable bid mode on calculator
         self.calculator._bid_mode = True
-        # Clear memos so bid prices are used fresh
         try:
             self.calculator.clear_price_memoization()
         except Exception:
             pass
 
+        all_results: List[Dict] = []
         try:
-            all_results: List[Dict] = []
-            for sub_mode in ('PROFIT', 'SAFE'):
-                try:
-                    part = self._compute_results_part(calc_mode=sub_mode, is_stattrak=is_stattrak)
-                    for r in part:
-                        r['bid_mode'] = True
-                        r['bid_sub_mode'] = sub_mode
-                    all_results.extend(part)
-                except Exception:
-                    logger.debug('BID mode: sub_mode=%s failed', sub_mode, exc_info=True)
-
-            # Deduplicate: keep best ROI per (collection, target_skin, is_stattrak)
-            seen: dict = {}
-            deduped: List[Dict] = []
-            for r in all_results:
-                key = (
-                    str(r.get('target_collection') or ''),
-                    str(r.get('hunt_output') or ''),
-                    bool(r.get('is_stattrak')),
-                )
-                existing = seen.get(key)
-                if existing is None or float(r.get('roi') or 0.0) > float(existing.get('roi') or 0.0):
-                    seen[key] = r
-            deduped = list(seen.values())
-
-            logger.info('BID mode: %d contracts (%s)', len(deduped), 'ST' if is_stattrak else 'NO')
-            return deduped
-
+            for is_stattrak in (False, True):
+                part = self._compute_bid_results_part(is_stattrak=is_stattrak)
+                all_results.extend(part)
         finally:
-            # Always restore ask mode and clear bid memos
             self.calculator._bid_mode = False
             try:
                 self.calculator.clear_price_memoization()
             except Exception:
                 pass
 
-    def _compute_results_deep(self, *, calc_mode: str) -> List[Dict]:
+        return all_results
+
+    def _compute_bid_results_part(self, *, is_stattrak: bool) -> List[Dict]:
+        """
+        Compute contracts in BID mode for one is_stattrak value.
+        Assumes _bid_mode is already enabled by the caller (_compute_bid_results_all).
+        Runs PROFIT + SAFE with bid prices, deduplicates by (collection, target, is_stattrak).
+        """
         if not self.calculator:
             return []
 
-        try:
-            max_results = int(os.getenv('HUNT_MAX_RESULTS', '200') or 200)
-        except Exception:
-            max_results = 200
+        all_results: List[Dict] = []
+        for sub_mode in ('PROFIT', 'SAFE'):
+            try:
+                part = self._compute_results_part(calc_mode=sub_mode, is_stattrak=is_stattrak)
+                for r in part:
+                    r['bid_mode'] = True
+                    r['bid_sub_mode'] = sub_mode
+                all_results.extend(part)
+            except Exception:
+                logger.debug('BID mode: sub_mode=%s failed', sub_mode, exc_info=True)
 
-        results: List[Dict] = []
-        results.extend(self._compute_results_part(calc_mode=calc_mode, is_stattrak=False))
-        results.extend(self._compute_results_part(calc_mode=calc_mode, is_stattrak=True))
-
-        if not results:
-            return []
-
-        def _sort_key(r: Dict) -> float:
-            return float(
-                r.get('_rank_score')
-                or r.get('_base_rank_score')
-                or r.get('final_score')
-                or r.get('opportunity_score')
-                or r.get('contract_score')
-                or 0.0
+        # Deduplicate: keep best ROI per (collection, target_skin, is_stattrak)
+        seen: dict = {}
+        for r in all_results:
+            key = (
+                str(r.get('target_collection') or ''),
+                str(r.get('hunt_output') or ''),
+                bool(r.get('is_stattrak')),
             )
+            existing = seen.get(key)
+            if existing is None or float(r.get('roi') or 0.0) > float(existing.get('roi') or 0.0):
+                seen[key] = r
 
-        results.sort(key=_sort_key, reverse=True)
-        return results[: int(max_results)]
+        deduped = list(seen.values())
+        logger.info('BID mode: %d contracts (%s)', len(deduped), 'ST' if is_stattrak else 'NO')
+        return deduped
 
     def _apply_max_investment(self, results: List[Dict], max_investment: Optional[float]) -> List[Dict]:
         if max_investment is None:
@@ -418,7 +392,8 @@ class TargetHuntingService:
 
             try:
                 pm = getattr(self, 'price_manager', None)
-                if pm is not None:
+                if pm is not None and calc_mode != 'BID':
+                    # BID reuses prices already loaded by PROFIT/SAFE refresh
                     logger.info('Refreshing price cache...')
                     price_refresh_start = time.time()
                     ok = bool(pm.refresh_prices(force_refresh=True))
@@ -443,9 +418,15 @@ class TargetHuntingService:
                 max_results = 200
 
             logger.info('Computing contracts (Normal + StatTrak)...')
-            updated_no = self._compute_results_part(calc_mode=calc_mode, is_stattrak=False)
-            updated_st = self._compute_results_part(calc_mode=calc_mode, is_stattrak=True)
-            updated = list(updated_no) + list(updated_st)
+            if calc_mode == 'BID':
+                # BID handles both ST and non-ST in one call to avoid redundant price reloads
+                updated = self._compute_bid_results_all()
+                updated_no = [r for r in updated if not r.get('is_stattrak')]
+                updated_st = [r for r in updated if r.get('is_stattrak')]
+            else:
+                updated_no = self._compute_results_part(calc_mode=calc_mode, is_stattrak=False)
+                updated_st = self._compute_results_part(calc_mode=calc_mode, is_stattrak=True)
+                updated = list(updated_no) + list(updated_st)
             logger.info('Found %d contracts (Normal: %d, StatTrak: %d)', len(updated), len(updated_no), len(updated_st))
 
             if updated:

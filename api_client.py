@@ -2184,9 +2184,10 @@ class DMarketClient:
         self._rate_lock = threading.RLock()
 
         self._cache_lock = threading.RLock()
-        self._listings_cache: dict = {}   # key -> (ts, data)
-        self._prices_cache: dict = {}     # title -> (ts, price_usd)
-        self._last_sales_cache: dict = {} # (title, limit) -> (ts, prices)
+        self._listings_cache: dict = {}    # key -> (ts, data)
+        self._prices_cache: dict = {}      # title -> (ts, price_usd)
+        self._last_sales_cache: dict = {}  # (title, limit) -> (ts, prices)
+        self._order_book_cache: dict = {}  # title -> (ts, result)
 
         self._signing_available = False
         if self.enabled:
@@ -2351,7 +2352,7 @@ class DMarketClient:
     ) -> Optional[Dict]:
         """
         Fetch best ask (offerBestPrice) and best bid (orderBestPrice) from DMarket
-        aggregated-prices endpoint.
+        aggregated-prices endpoint. Results are cached for cache_ttl seconds.
         Returns {'best_ask': float, 'best_bid': float|None, 'currency': 'USD'} or None.
         Prices in API are in cents — converted to USD here.
         """
@@ -2364,6 +2365,13 @@ class DMarketClient:
         else:
             title = f'{st_prefix}{skin_name}'
 
+        # Check cache
+        now = time.time()
+        with self._cache_lock:
+            cached = self._order_book_cache.get(title)
+            if cached and (now - cached[0]) < self.cache_ttl:
+                return cached[1]
+
         data = self._post('/marketplace-api/v1/aggregated-prices', {
             'filter': {'game': self.GAME_ID, 'titles': [title]},
             'limit': '1',
@@ -2371,6 +2379,7 @@ class DMarketClient:
         if not data:
             return None
 
+        result = None
         for item in data.get('aggregatedPrices') or []:
             if str(item.get('title') or '') != title:
                 continue
@@ -2382,15 +2391,19 @@ class DMarketClient:
                 best_ask = float(ask_cents) / 100.0 if ask_cents is not None else None
                 best_bid = float(bid_cents) / 100.0 if bid_cents is not None else None
                 if best_ask is None:
-                    return None
+                    break
                 # Sanity: ignore bids < 1% of ask
                 if best_bid is not None and best_bid < best_ask * 0.01:
                     best_bid = None
-                return {'best_ask': best_ask, 'best_bid': best_bid, 'currency': 'USD'}
+                result = {'best_ask': best_ask, 'best_bid': best_bid, 'currency': 'USD'}
             except Exception:
-                return None
+                break
 
-        return None
+        # Cache result (even None to avoid hammering on missing skins)
+        with self._cache_lock:
+            self._order_book_cache[title] = (time.time(), result)
+
+        return result
 
     def suggest_request_price(
         self,
@@ -3310,11 +3323,6 @@ class PriceManager:
         if not ci_data:
             return False
 
-        try:
-            min_bid_ratio = float(os.getenv('MC_SELL_MIN_BID_VS_ASK', '0.70') or 0.70)
-        except Exception:
-            min_bid_ratio = 0.70
-
         _WEAR_FLOAT_MAX = {
             'Factory New': 0.07, 'Minimal Wear': 0.15,
             'Field-Tested': 0.38, 'Well-Worn': 0.45, 'Battle-Scarred': 1.0,
@@ -3325,19 +3333,17 @@ class PriceManager:
             mhn = str(entry.get('market_hash_name') or '')
             if not mhn:
                 continue
-            raw_bid = entry.get('buy_order')
             raw_ask = entry.get('price')
-            if raw_bid is None or raw_ask is None:
+            avg_price = entry.get('avg_price')
+            if raw_ask is None:
                 continue
             try:
-                bid = float(raw_bid)
                 ask = float(raw_ask)
             except Exception:
                 continue
-            if bid <= 0 or ask <= 0:
+            if ask <= 0:
                 continue
-            if bid < ask * min_bid_ratio:
-                continue
+
             wear = None
             for w in _WEAR_FLOAT_MAX:
                 if mhn.endswith(f'({w})'):
@@ -3345,19 +3351,352 @@ class PriceManager:
                     break
             if not wear:
                 continue
+
+            # Compute suggest_request_price logic without HTTP:
+            # suggested = min(avg_price * 0.97, ask * 0.95)
+            # floor: ask * 0.70
+            try:
+                median_ratio = float(os.getenv('MC_REQUEST_MEDIAN_RATIO', '0.97') or 0.97)
+                max_vs_ask = float(os.getenv('MC_REQUEST_MAX_VS_ASK', '0.95') or 0.95)
+                min_vs_ask = float(os.getenv('MC_REQUEST_MIN_VS_ASK', '0.70') or 0.70)
+                fallback_ratio = float(os.getenv('MC_REQUEST_FALLBACK_RATIO', '0.90') or 0.90)
+            except Exception:
+                median_ratio, max_vs_ask, min_vs_ask, fallback_ratio = 0.97, 0.95, 0.70, 0.90
+
+            if avg_price is not None:
+                try:
+                    avg = float(avg_price)
+                    candidate = round(avg * median_ratio, 2)
+                except Exception:
+                    candidate = round(ask * fallback_ratio, 2)
+            else:
+                candidate = round(ask * fallback_ratio, 2)
+
+            # Apply ceiling and floor
+            candidate = min(candidate, round(ask * max_vs_ask, 2))
+            candidate = max(candidate, round(ask * min_vs_ask, 2))
+
+            if candidate <= 0:
+                continue
+
             norm = self.market_client._normalize_skin_name(mhn)
             if not norm:
                 continue
+            is_st = 'stattrak' in mhn.lower()
+            if is_st:
+                norm = norm + '|st'
             if norm not in new_bids:
                 new_bids[norm] = {}
-            new_bids[norm][wear] = bid
+            if wear not in new_bids[norm]:
+                new_bids[norm][wear] = round(candidate, 2)
 
         with self._bid_prices_lock:
             self._bid_prices = new_bids
             self._bid_prices_ts = time.time()
+            # Clear per-skin bid price cache so fresh values are computed
+            if hasattr(self, '_bid_price_cache'):
+                self._bid_price_cache.clear()
 
-        logger.info('BID prices loaded: %d skins with valid buy orders', len(new_bids))
+        logger.info('BID prices loaded: %d skins with valid MC buy orders', len(new_bids))
         return bool(new_bids)
+
+    def _merge_dmarket_bid_prices(
+        self,
+        bids: Dict[str, Dict[str, float]],
+        *,
+        ci_data: Optional[Dict] = None,
+        min_bid_ratio: float = 0.30,
+    ) -> None:
+        """
+        For skins where DMarket ask < MC ask, fetch DM orderBestPrice and
+        use min(MC bid, DM bid) — best possible buy-request price for the buyer.
+
+        Uses DMarket _prices_cache (loaded by refresh_prices) to identify
+        DM-cheaper skins without extra API calls, then batch-fetches DM bids
+        via aggregated-prices for those skins only.
+        """
+        dmc = self.dmarket_client
+        if not dmc or not bool(getattr(dmc, 'enabled', False)):
+            return
+
+        _WEAR_FLOAT_MAX = {
+            'Factory New': 0.07, 'Minimal Wear': 0.15,
+            'Field-Tested': 0.38, 'Well-Worn': 0.45, 'Battle-Scarred': 1.0,
+        }
+
+        # Build reverse map norm -> {wear: mhn} from class_instance
+        if ci_data is None:
+            ci_data = self.market_client._get_class_instance_prices()
+        if not ci_data:
+            return
+
+        norm_to_mhn: Dict[str, Dict[str, str]] = {}
+        norm_to_mc_ask: Dict[str, Dict[str, float]] = {}
+        for entry in ci_data.values():
+            mhn = str(entry.get('market_hash_name') or '')
+            if not mhn:
+                continue
+            wear = next((w for w in _WEAR_FLOAT_MAX if mhn.endswith(f'({w})')), None)
+            if not wear:
+                continue
+            norm = self.market_client._normalize_skin_name(mhn)
+            is_st = 'stattrak' in mhn.lower()
+            if is_st:
+                norm = norm + '|st'
+            if norm not in norm_to_mhn:
+                norm_to_mhn[norm] = {}
+                norm_to_mc_ask[norm] = {}
+            if wear not in norm_to_mhn[norm]:
+                norm_to_mhn[norm][wear] = mhn
+                try:
+                    norm_to_mc_ask[norm][wear] = float(entry.get('price') or 0)
+                except Exception:
+                    pass
+
+        # Find skins where DM ask < MC ask using DM _prices_cache
+        # DM prices_cache: {normalized_name: [(price, float, wear, is_stattrak), ...]}
+        dm_prices_cache = getattr(dmc, '_prices_cache', None)
+
+        # Collect titles to query DM bids for
+        # If DM cache is available: only query skins where DM is cheaper
+        # If DM cache is empty: query all skins with MC bids (DM will return data only for skins it has)
+        titles_to_query: List[str] = []
+        seen: set = set()
+
+        with self.market_client._prices_cache_lock:
+            mc_cache = dict(self.market_client._prices_cache)
+
+        for norm_key, wear_bids in bids.items():
+            mhn_map = norm_to_mhn.get(norm_key, {})
+            mc_ask_map = norm_to_mc_ask.get(norm_key, {})
+            for wear in wear_bids:
+                mhn = mhn_map.get(wear)
+                if not mhn or mhn in seen:
+                    continue
+                mc_ask = mc_ask_map.get(wear, 0)
+                if mc_ask <= 0:
+                    continue
+
+                should_query = False
+                if dm_prices_cache:
+                    # Check DM price for this skin
+                    dm_lots = dm_prices_cache.get(norm_key) or []
+                    dm_prices_for_wear = [float(l[0]) for l in dm_lots
+                                          if len(l) >= 3 and str(l[2]) == wear and l[0] > 0]
+                    if dm_prices_for_wear and min(dm_prices_for_wear) < mc_ask:
+                        should_query = True
+                else:
+                    # No DM cache — query all (DM returns empty for skins it doesn't have)
+                    should_query = True
+
+                if should_query:
+                    titles_to_query.append(mhn)
+                    seen.add(mhn)
+
+        if not titles_to_query:
+            return
+
+        # Apply limit to avoid too many API calls
+        try:
+            max_titles = int(os.getenv('BID_DM_MAX_TITLES', '300') or 300)
+        except Exception:
+            max_titles = 300
+        titles_to_query = titles_to_query[:max_titles]
+
+        logger.info('BID: fetching DM bids for %d skins', len(titles_to_query))
+
+        # Batch fetch DM bids
+        chunk_size = 100
+        merged = 0
+        for i in range(0, len(titles_to_query), chunk_size):
+            chunk = titles_to_query[i:i + chunk_size]
+            try:
+                data = dmc._post('/marketplace-api/v1/aggregated-prices', {
+                    'filter': {'game': dmc.GAME_ID, 'titles': chunk},
+                    'limit': str(len(chunk)),
+                })
+                if not data:
+                    continue
+                for item in data.get('aggregatedPrices') or []:
+                    title = str(item.get('title') or '')
+                    order = item.get('orderBestPrice') or {}
+                    offer = item.get('offerBestPrice') or {}
+                    bid_cents = order.get('Amount') or order.get('USD')
+                    ask_cents = offer.get('Amount') or offer.get('USD')
+                    if bid_cents is None or ask_cents is None:
+                        continue
+                    try:
+                        dm_bid = float(bid_cents) / 100.0
+                        dm_ask = float(ask_cents) / 100.0
+                    except Exception:
+                        continue
+                    if dm_bid <= 0 or dm_ask <= 0:
+                        continue
+                    if dm_bid < dm_ask * min_bid_ratio or dm_bid > dm_ask:
+                        continue
+                    wear = next((w for w in _WEAR_FLOAT_MAX if title.endswith(f'({w})')), None)
+                    if not wear:
+                        continue
+                    norm = self.market_client._normalize_skin_name(title)
+                    if not norm:
+                        continue
+                    is_st = 'stattrak' in title.lower()
+                    if is_st:
+                        norm = norm + '|st'
+                    if norm not in bids:
+                        continue
+                    existing = bids[norm].get(wear)
+                    # Take min — best price for buyer
+                    if existing is None or dm_bid < existing:
+                        bids[norm][wear] = dm_bid
+                        merged += 1
+            except Exception:
+                logger.debug('DM bid merge chunk %d failed', i, exc_info=True)
+
+        logger.info('BID: DM bid merged for %d skins (cheaper on DM)', merged)
+
+    def _load_dmarket_bid_prices(
+        self,
+        bids: Dict[str, Dict[str, float]],
+        *,
+        min_bid_ratio: float = 0.30,
+        max_titles: int = 500,
+        ci_data: Optional[Dict] = None,
+    ) -> None:
+        """
+        Fetch DMarket bid prices (orderBestPrice) via aggregated-prices batch API
+        and merge into bids dict — keeping the better (higher) bid per skin/wear.
+        Only queries skins that are already in the DMarket price cache.
+        """
+        dmc = self.dmarket_client
+        if not dmc or not bool(getattr(dmc, 'enabled', False)):
+            return
+
+        # Collect titles from MC price cache — these are the skins we care about
+        with self.market_client._prices_cache_lock:
+            mc_cache_keys = list(self.market_client._prices_cache.keys())
+
+        if not mc_cache_keys:
+            return
+
+        _WEAR_FLOAT_MAX = {
+            'Factory New': 0.07, 'Minimal Wear': 0.15,
+            'Field-Tested': 0.38, 'Well-Worn': 0.45, 'Battle-Scarred': 1.0,
+        }
+
+        # Build full titles from normalized names + wears that have MC bids
+        # Only query DM for skins that already have a MC bid (saves API calls)
+        titles = []
+        norm_wear_map: Dict[str, str] = {}  # title -> (norm, wear)
+        for norm_key, wear_bids in bids.items():
+            for wear in wear_bids:
+                # Reconstruct a plausible title — DMarket uses same format
+                # We need to find the original skin name from the normalized key
+                # Use MC cache to find a matching entry
+                pass
+
+        # Simpler: build titles directly from MC cache entries
+        # MC cache key is normalized (lowercase, no wear), but we need full titles
+        # Use class_instance data which has market_hash_name
+        if ci_data is None:
+            ci_data = self.market_client._get_class_instance_prices()
+        if not ci_data:
+            return
+
+        # Build titles from mc_bids keys — reconstruct full market_hash_name
+        # using class_instance data as a lookup for original names
+        # Build a reverse map: norm -> {wear: mhn}
+        norm_to_mhn: Dict[str, Dict[str, str]] = {}
+        for entry in ci_data.values():
+            mhn = str(entry.get('market_hash_name') or '')
+            if not mhn:
+                continue
+            wear = next((w for w in _WEAR_FLOAT_MAX if mhn.endswith(f'({w})')), None)
+            if not wear:
+                continue
+            norm = self.market_client._normalize_skin_name(mhn)
+            if norm not in norm_to_mhn:
+                norm_to_mhn[norm] = {}
+            if wear not in norm_to_mhn[norm]:
+                norm_to_mhn[norm][wear] = mhn  # store first occurrence
+
+        # Collect titles for skins that have MC bids
+        titles_to_query = []
+        seen_titles: set = set()
+        for norm_key, wear_bids in bids.items():
+            if len(titles_to_query) >= max_titles:
+                break
+            mhn_map = norm_to_mhn.get(norm_key, {})
+            for wear in wear_bids:
+                mhn = mhn_map.get(wear)
+                if mhn and mhn not in seen_titles:
+                    titles_to_query.append(mhn)
+                    seen_titles.add(mhn)
+
+        titles = titles_to_query
+
+        if not titles:
+            return
+
+        logger.info('BID: fetching DMarket bid prices for %d skins', len(titles))
+
+        # Batch in chunks of 100
+        chunk_size = 100
+        fetched = 0
+        for i in range(0, len(titles), chunk_size):
+            chunk = titles[i:i + chunk_size]
+            try:
+                data = dmc._post('/marketplace-api/v1/aggregated-prices', {
+                    'filter': {'game': dmc.GAME_ID, 'titles': chunk},
+                    'limit': str(len(chunk)),
+                })
+                if not data:
+                    continue
+                for item in data.get('aggregatedPrices') or []:
+                    title = str(item.get('title') or '')
+                    if not title:
+                        continue
+                    order = item.get('orderBestPrice') or {}
+                    offer = item.get('offerBestPrice') or {}
+                    bid_cents = order.get('Amount') or order.get('USD')
+                    ask_cents = offer.get('Amount') or offer.get('USD')
+                    if bid_cents is None or ask_cents is None:
+                        continue
+                    try:
+                        bid = float(bid_cents) / 100.0
+                        ask = float(ask_cents) / 100.0
+                    except Exception:
+                        continue
+                    if bid <= 0 or ask <= 0:
+                        continue
+                    if bid < ask * min_bid_ratio or bid > ask:
+                        continue
+
+                    # Determine wear
+                    wear = None
+                    for w in _WEAR_FLOAT_MAX:
+                        if title.endswith(f'({w})'):
+                            wear = w
+                            break
+                    if not wear:
+                        continue
+
+                    norm = self.market_client._normalize_skin_name(title)
+                    if not norm:
+                        continue
+
+                    if norm not in bids:
+                        bids[norm] = {}
+                    # Keep better (higher) bid — DM may be better than MC
+                    existing = bids[norm].get(wear)
+                    if existing is None or bid > existing:
+                        bids[norm][wear] = bid
+                        fetched += 1
+            except Exception:
+                logger.debug('DMarket bid chunk %d failed', i, exc_info=True)
+                continue
+
+        logger.info('BID: DMarket bid prices merged: %d updates', fetched)
 
     def get_bid_price(
         self,
@@ -3367,22 +3706,74 @@ class PriceManager:
         require_stattrak: bool = False,
     ) -> Optional[float]:
         """
-        Return best buy-order price for a skin in BID mode.
-        Returns None if no valid bid exists (use ask price as fallback).
+        Return realistic buy-request price for a skin in BID mode.
+        Reads from pre-loaded _bid_prices cache (populated by load_bid_prices).
+        Falls back to suggest_request_price only if not in cache.
+        Returns None if no price can be determined.
         """
+        # Cache key with |st suffix for StatTrak
         st_prefix = 'StatTrak\u2122 ' if bool(require_stattrak) else ''
-        if target_wear:
-            mhn = f'{st_prefix}{skin_name} ({target_wear})'
-        else:
-            mhn = f'{st_prefix}{skin_name}'
+        mhn = f'{st_prefix}{skin_name} ({target_wear})' if target_wear else f'{st_prefix}{skin_name}'
         norm = self.market_client._normalize_skin_name(mhn)
+        if bool(require_stattrak):
+            norm = norm + '|st'
+
+        # Primary: pre-loaded suggest_request_price cache
         with self._bid_prices_lock:
             wears = self._bid_prices.get(norm)
-        if not wears:
-            return None
-        if target_wear and target_wear in wears:
-            return wears[target_wear]
         if wears:
+            if target_wear and target_wear in wears:
+                return wears[target_wear]
+            if wears:
+                return min(wears.values())
+
+        # Fallback: compute on-demand (slow, only for cache misses)
+        # Disabled — too slow for bulk calculator use. Return None to use ask price.
+        return None
+
+    def _compute_bid_price(
+        self,
+        skin_name: str,
+        *,
+        target_wear: Optional[str] = None,
+        require_stattrak: bool = False,
+    ) -> Optional[float]:
+        """Internal: compute bid price without caching."""
+        # Primary: suggest_request_price from MC (median-anchored, realistic)
+        mc_req = self.market_client.suggest_request_price(
+            skin_name, target_wear=target_wear, require_stattrak=bool(require_stattrak)
+        )
+        mc_suggested = float(mc_req['suggested_price']) if mc_req and mc_req.get('suggested_price') is not None else None
+
+        # DMarket: suggest_request_price if DM is enabled
+        dm_suggested = None
+        dmc = self.dmarket_client
+        if dmc and bool(getattr(dmc, 'enabled', False)):
+            try:
+                dm_req = dmc.suggest_request_price(
+                    skin_name, target_wear=target_wear, require_stattrak=bool(require_stattrak)
+                )
+                if dm_req and dm_req.get('suggested_price') is not None:
+                    dm_suggested = float(dm_req['suggested_price'])
+            except Exception:
+                pass
+
+        # Return best (lowest realistic) price
+        candidates = [p for p in [mc_suggested, dm_suggested] if p is not None and p > 0]
+        if candidates:
+            return min(candidates)
+
+        # Fallback: raw MC bid from class_instance
+        st_prefix = 'StatTrak\u2122 ' if bool(require_stattrak) else ''
+        mhn = f'{st_prefix}{skin_name} ({target_wear})' if target_wear else f'{st_prefix}{skin_name}'
+        norm = self.market_client._normalize_skin_name(mhn)
+        if bool(require_stattrak):
+            norm = norm + '|st'
+        with self._bid_prices_lock:
+            wears = self._bid_prices.get(norm)
+        if wears:
+            if target_wear and target_wear in wears:
+                return wears[target_wear]
             return min(wears.values())
         return None
 

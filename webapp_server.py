@@ -165,7 +165,7 @@ def _serialize_contract_summary(idx: int, c: dict) -> dict:
     }
 
 
-def _serialize_contract_detail(idx: int, c: dict) -> dict:
+def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> dict:
     """Full detail for the detail screen."""
     summary = _serialize_contract_summary(idx, c)
 
@@ -313,22 +313,23 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         if mf is None:
             mf = _WEAR_MAX_FLOAT.get(g['wear'])
 
-        # Request price suggestion (best-effort)
+        # Request price suggestion (best-effort) — skip in BID mode (price IS the bid)
         request_price = None
-        try:
-            _svc = _get_svc()
-            _pm = getattr(_svc, 'price_manager', None)
-            if _pm is not None and g['buy_source'] != 'CSFLOAT':
-                _req = _pm.suggest_request_price(
-                    g['name'],
-                    target_wear=g['wear'] or None,
-                    require_stattrak=bool(c.get('is_stattrak')),
-                    buy_source=g['buy_source'],
-                )
-                if _req and _req.get('suggested_price') is not None:
-                    request_price = round(float(_req['suggested_price']), 2)
-        except Exception:
-            pass
+        if mode != 'BID':
+            try:
+                _svc = _get_svc()
+                _pm = getattr(_svc, 'price_manager', None)
+                if _pm is not None and g['buy_source'] != 'CSFLOAT':
+                    _req = _pm.suggest_request_price(
+                        g['name'],
+                        target_wear=g['wear'] or None,
+                        require_stattrak=bool(c.get('is_stattrak')),
+                        buy_source=g['buy_source'],
+                    )
+                    if _req and _req.get('suggested_price') is not None:
+                        request_price = round(float(_req['suggested_price']), 2)
+            except Exception:
+                pass
 
         input_groups.append({
             'start': start_i,
@@ -391,6 +392,7 @@ def _serialize_contract_detail(idx: int, c: dict) -> dict:
         'total_inputs': len(ins),
         'max_allowed_avg_float': max_allowed_avg_float,
         'max_allowed_wear': max_allowed_wear,
+        'bid_mode': mode == 'BID',
     })
     return detail
 
@@ -540,7 +542,7 @@ async def api_contract_detail(
         except Exception:
             logger.debug('Failed to compute outcomes for idx=%d', idx, exc_info=True)
 
-    return _serialize_contract_detail(idx, c)
+    return _serialize_contract_detail(idx, c, mode=mode)
 
 
 @app.get('/api/status')

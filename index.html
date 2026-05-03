@@ -1153,7 +1153,7 @@ function renderDetailFull(c) {
   <div class="input-info">
     <div class="input-name">${escHtml(g.name)}</div>
     <div class="input-wear">${wearLine}</div>
-    ${g.request_price != null ? `<div class="input-req">Request: $${fmt$(g.request_price)}</div>` : ''}
+    ${g.request_price != null && !c.bid_mode ? `<div class="input-req">Request: $${fmt$(g.request_price)}</div>` : ''}
   </div>
   <div class="input-right">
     <div class="input-price">$${fmt$(g.total_price)} ${srcBadge(g.buy_source)}</div>
