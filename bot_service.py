@@ -244,9 +244,9 @@ class TargetHuntingService:
 
     def _compute_bid_results_all(self) -> List[Dict]:
         """
-        Compute BID mode contracts for both ST and non-ST in one pass.
-        Enables bid_mode once, shares memoization across all sub-computations,
-        clears memos only at the end.
+        Compute BID mode contracts by reusing PROFIT+SAFE results and
+        recalculating input_cost/roi/net_profit with bid prices.
+        This is ~100x faster than running full computation with bid prices.
         """
         if not self.calculator:
             return []
@@ -258,6 +258,98 @@ class TargetHuntingService:
             except Exception:
                 logger.debug('BID: load_bid_prices failed', exc_info=True)
 
+        # Collect contracts from PROFIT and SAFE caches
+        source_contracts: List[Dict] = []
+        with self._cache_lock:
+            for mode in ('PROFIT', 'SAFE'):
+                entry = self._cache.get(mode) or {}
+                results = list(entry.get('results') or [])
+                source_contracts.extend(results)
+
+        if not source_contracts:
+            # Fallback: full computation if no cached results yet
+            logger.info('BID: no cached PROFIT/SAFE results, running full computation')
+            return self._compute_bid_results_full()
+
+        logger.info('BID: recalculating %d contracts with bid prices', len(source_contracts))
+
+        bid_contracts: List[Dict] = []
+        for c in source_contracts:
+            try:
+                bid_c = self._recalculate_with_bid_prices(c, pm)
+                if bid_c is not None:
+                    bid_contracts.append(bid_c)
+            except Exception:
+                continue
+
+        # Deduplicate: keep best ROI per (collection, target_skin, is_stattrak)
+        seen: dict = {}
+        for r in bid_contracts:
+            key = (
+                str(r.get('target_collection') or ''),
+                str(r.get('hunt_output') or ''),
+                bool(r.get('is_stattrak')),
+            )
+            existing = seen.get(key)
+            if existing is None or float(r.get('roi') or 0.0) > float(existing.get('roi') or 0.0):
+                seen[key] = r
+
+        result = list(seen.values())
+        logger.info('BID: %d contracts after recalculation', len(result))
+        return result
+
+    def _recalculate_with_bid_prices(self, c: Dict, pm) -> Optional[Dict]:
+        """
+        Recalculate a contract's input_cost, roi, net_profit using bid prices.
+        Returns a copy of the contract with updated financials, or None if
+        bid prices are not available for any input skin.
+        """
+        ins = list(c.get('input_skins') or [])
+        if not ins:
+            return None
+
+        is_st = bool(c.get('is_stattrak'))
+        new_cost = 0.0
+        new_ins = []
+        any_bid = False
+
+        for s in ins:
+            nm = str(s.get('name') or '')
+            wr = str(s.get('wear') or '')
+            if not nm:
+                new_ins.append(dict(s))
+                new_cost += float(s.get('price') or 0.0)
+                continue
+
+            bid_p = pm.get_bid_price(nm, target_wear=wr or None, require_stattrak=is_st)
+            if bid_p is not None and bid_p > 0:
+                s2 = dict(s)
+                s2['price'] = float(bid_p)
+                s2['buy_source'] = 'MARKETCSGO_BID'
+                new_ins.append(s2)
+                new_cost += float(bid_p)
+                any_bid = True
+            else:
+                new_ins.append(dict(s))
+                new_cost += float(s.get('price') or 0.0)
+
+        if not any_bid:
+            return None  # No bid prices available — skip this contract
+
+        new_c = dict(c)
+        new_c['input_skins'] = new_ins
+        new_c['input_cost'] = round(new_cost, 4)
+        new_c['bid_mode'] = True
+
+        # Recalculate roi and net_profit
+        ev = float(c.get('expected_output') or 0.0)
+        if new_cost > 0 and ev > 0:
+            new_c['net_profit'] = round(ev - new_cost, 4)
+            new_c['roi'] = round((ev - new_cost) / new_cost * 100.0, 4)
+        return new_c
+
+    def _compute_bid_results_full(self) -> List[Dict]:
+        """Fallback: full BID computation when no cached results available."""
         self.calculator._bid_mode = True
         try:
             self.calculator.clear_price_memoization()
@@ -447,6 +539,10 @@ class TargetHuntingService:
                 warm_n = int(os.getenv('OUTCOMES_WARMUP_TOPN') or 30)
             except Exception:
                 warm_n = 30
+            # BID mode: skip outcomes warmup — it triggers HTTP requests per outcome
+            # and would multiply computation time by ~5x
+            if calc_mode == 'BID':
+                warm_n = 0
             warm_n = max(0, min(int(warm_n), len(updated)))
 
             calc = getattr(self, 'calculator', None)

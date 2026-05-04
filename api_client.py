@@ -3333,16 +3333,7 @@ class PriceManager:
             mhn = str(entry.get('market_hash_name') or '')
             if not mhn:
                 continue
-            raw_ask = entry.get('price')
             avg_price = entry.get('avg_price')
-            if raw_ask is None:
-                continue
-            try:
-                ask = float(raw_ask)
-            except Exception:
-                continue
-            if ask <= 0:
-                continue
 
             wear = None
             for w in _WEAR_FLOAT_MAX:
@@ -3350,6 +3341,39 @@ class PriceManager:
                     wear = w
                     break
             if not wear:
+                continue
+
+            # Use v2/prices cache as ask — use median to avoid outlier cheap lots
+            # class_instance.price is a single lot price — can be an outlier
+            norm_key = self.market_client._normalize_skin_name(mhn)
+            is_st = 'stattrak' in mhn.lower()
+            ask = None
+            with self.market_client._prices_cache_lock:
+                lots = self.market_client._prices_cache.get(norm_key) or []
+            # Filter by wear AND stattrak flag to avoid mixing ST/non-ST prices
+            wear_prices = sorted([
+                float(l[0]) for l in lots
+                if len(l) >= 4 and str(l[2]) == wear and bool(l[3]) == is_st and l[0] > 0
+            ])
+            if not wear_prices:
+                # Fallback: filter by wear only (some cache entries may lack is_stattrak)
+                wear_prices = sorted([
+                    float(l[0]) for l in lots
+                    if len(l) >= 3 and str(l[2]) == wear and l[0] > 0
+                ])
+            if wear_prices:
+                # Use median to avoid outlier cheap lots skewing the ceiling
+                ask = wear_prices[len(wear_prices) // 2]
+            if ask is None or ask <= 0:
+                # Fallback to class_instance price
+                raw_ask = entry.get('price')
+                if raw_ask is None:
+                    continue
+                try:
+                    ask = float(raw_ask)
+                except Exception:
+                    continue
+            if ask <= 0:
                 continue
 
             # Compute suggest_request_price logic without HTTP:
@@ -3379,10 +3403,9 @@ class PriceManager:
             if candidate <= 0:
                 continue
 
-            norm = self.market_client._normalize_skin_name(mhn)
+            norm = norm_key
             if not norm:
                 continue
-            is_st = 'stattrak' in mhn.lower()
             if is_st:
                 norm = norm + '|st'
             if norm not in new_bids:
