@@ -331,6 +331,35 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
             except Exception:
                 pass
 
+        # Market depth: how many lots available at/near the listed price
+        # Shows avg_price_for_count to warn when not enough cheap lots exist
+        market_depth = None
+        try:
+            _svc2 = _get_svc()
+            _pm2 = getattr(_svc2, 'price_manager', None)
+            if _pm2 is not None and g['buy_source'] in ('MARKETCSGO', 'MARKETCSGO_BID', ''):
+                _mc = _pm2.market_client
+                _prices = _mc.get_real_listings(
+                    g['name'],
+                    target_wear=g['wear'] or None,
+                    exclude_stattrak=not bool(c.get('is_stattrak')),
+                    require_stattrak=bool(c.get('is_stattrak')),
+                    limit=g['count'] + 5,
+                )
+                if _prices:
+                    available = len(_prices)
+                    needed = g['count']
+                    prices_for_needed = _prices[:needed]
+                    avg_for_needed = round(sum(prices_for_needed) / len(prices_for_needed), 2) if prices_for_needed else None
+                    market_depth = {
+                        'available': available,
+                        'needed': needed,
+                        'avg_price_for_needed': avg_for_needed,
+                        'sufficient': available >= needed,
+                    }
+        except Exception:
+            pass
+
         input_groups.append({
             'start': start_i,
             'end': end_i,
@@ -346,6 +375,7 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
             'buy_source': g['buy_source'],
             'individual_skins': g['individual_skins'],
             'request_price': request_price,
+            'market_depth': market_depth,
         })
 
     # Outcomes

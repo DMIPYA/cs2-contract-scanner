@@ -385,6 +385,8 @@ body {
 .input-price { font-size: 14px; font-weight: 600; color: var(--orange); }
 .input-float { font-size: 10px; color: var(--text4); margin-top: 2px; }
 .input-req { font-size: 10px; color: var(--green); margin-top: 2px; letter-spacing: .3px; }
+.input-depth { font-size: 10px; color: var(--text4); margin-top: 2px; letter-spacing: .3px; }
+.input-depth.warn { color: var(--orange); }
 
 /* ── outcome items ── */
 .outcome-item {
@@ -1141,7 +1143,10 @@ function renderDetailFull(c) {
   } else {
     inputsList.innerHTML = groups.map((g, gIdx) => {
       const rangeLabel = g.start === g.end ? `${String(g.start).padStart(2,'0')}` : `${String(g.start).padStart(2,'0')}–${String(g.end).padStart(2,'0')}`;
-      const perItemTxt = g.count > 1 ? `$${fmt$(g.per_item)} ea` : '';
+      // Use real market depth avg if available, else per_item
+      const realAvg = g.market_depth && g.market_depth.avg_price_for_needed ? g.market_depth.avg_price_for_needed : null;
+      const realTotal = realAvg ? realAvg * g.count : null;
+      const perItemTxt = g.count > 1 ? (realAvg ? `avg $${fmt$(realAvg)} ea` : `$${fmt$(g.per_item)} ea`) : '';
       // Show wear + max float hint per group
       const maxF = g.max_float_for_wear;
       const wearLine = maxF != null
@@ -1156,7 +1161,7 @@ function renderDetailFull(c) {
     ${g.request_price != null && !c.bid_mode ? `<div class="input-req">Request: $${fmt$(g.request_price)}</div>` : ''}
   </div>
   <div class="input-right">
-    <div class="input-price">$${fmt$(g.total_price)} ${srcBadge(g.buy_source)}</div>
+    <div class="input-price">$${fmt$(realTotal !== null ? realTotal : g.total_price)} ${srcBadge(g.buy_source)}</div>
     ${perItemTxt ? `<div class="input-float">${perItemTxt}</div>` : ''}
   </div>
 </a>`;

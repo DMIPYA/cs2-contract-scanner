@@ -321,7 +321,7 @@ class TargetHuntingService:
                 new_cost += float(s.get('price') or 0.0)
                 continue
 
-            bid_p = pm.get_bid_price(nm, target_wear=wr or None, require_stattrak=is_st)
+            bid_p = pm.get_bid_price(nm, target_wear=wr if wr else None, require_stattrak=is_st)
             if bid_p is not None and bid_p > 0:
                 s2 = dict(s)
                 s2['price'] = float(bid_p)

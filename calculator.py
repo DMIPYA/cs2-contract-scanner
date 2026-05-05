@@ -739,9 +739,11 @@ class ContractCalculator:
                     d['buy_source'] = 'MARKETCSGO'
                 # BID mode: override price with buy-order price if available
                 if self._bid_mode:
-                    _is_st = bool(it.get('is_stattrak') or ('stattrak' in str(name).lower()))
+                    _is_st = bool(it.get('is_stattrak')) or (
+                        'stattrak' in str(name).lower() and it.get('is_stattrak') is not False
+                    )
                     bid_p = self.price_manager.get_bid_price(
-                        str(name), target_wear=str(wear),
+                        str(name), target_wear=str(wear) if wear else None,
                         require_stattrak=_is_st,
                     )
                     if bid_p is not None and bid_p > 0:
