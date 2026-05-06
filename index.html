@@ -794,11 +794,6 @@ function fmt$(v) {
   return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function fmtPct(v) {
-  const n = parseFloat(v) || 0;
-  return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
-}
-
 function wearTagHTML(abbr) {
   if (!abbr) return '';
   return `<span class="wtag ${abbr}">${abbr}</span>`;
@@ -1124,8 +1119,9 @@ function renderDetailFull(c) {
   document.getElementById('d-route-input').textContent = (c.rarity || 'Mil-Spec') + ' inputs';
   document.getElementById('d-route-output').textContent = c.name || '';
   const wearEl = document.getElementById('d-route-wear');
-  // Use expected_wear (actual quality based on float calculation) instead of target_wear (desired quality)
-  const displayWear = c.expected_wear || c.target_wear;
+  // Use wear from first outcome (most accurate) or fall back to expected_wear
+  const firstOutcomeWear = c.outcomes && c.outcomes.length > 0 ? c.outcomes[0].wear : null;
+  const displayWear = firstOutcomeWear || c.expected_wear || c.target_wear;
   if (displayWear) {
     wearEl.textContent = displayWear.toUpperCase();
     wearEl.style.display = '';

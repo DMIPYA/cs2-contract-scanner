@@ -1180,46 +1180,92 @@ class MarketCSGOClient:
         limit: int = 50,
     ) -> List[float]:
         """
-        Get real individual listing prices from full export (not aggregated).
-        Returns sorted list of prices in USD.
-        Uses _full_export_index if available, otherwise falls back to get_listings.
-        The full export index is built by load_full_export_index() called in background.
+        Get real individual listing prices using full export for depth + v2/prices for prices.
+        Full export tells us HOW MANY lots exist; v2/prices gives the actual USD price.
+        Returns a list of prices: [cheapest] * available_count, capped at limit.
+        Falls back to get_listings if full export index not available.
         """
         with self._prices_cache_lock:
             index = getattr(self, '_full_export_index', None)
 
-        if index is not None:
-            st_prefix = 'StatTrak™ ' if bool(require_stattrak) else ''
-            if target_wear:
-                mhn = f'{st_prefix}{skin_name} ({target_wear})'
-            else:
-                mhn = f'{st_prefix}{skin_name}'
-            norm = self._normalize_skin_name(mhn)
-            is_st = bool(require_stattrak)
-            raw = index.get(norm) or []
-            prices = sorted([
-                float(p) for p, st, w in raw
-                if float(p) > 0 and bool(st) == is_st
-                and (not target_wear or w == target_wear)
-            ])
-            if prices:
-                return prices[:limit]
+        st_prefix = 'StatTrak™ ' if bool(require_stattrak) else ''
+        if target_wear:
+            mhn = f'{st_prefix}{skin_name} ({target_wear})'
+        else:
+            mhn = f'{st_prefix}{skin_name}'
+        norm = self._normalize_skin_name(mhn)
+        is_st = bool(require_stattrak)
 
-        # Fallback: use aggregated cache (all same price)
-        lots = self.get_listings(
-            skin_name, target_wear=target_wear,
-            exclude_stattrak=not bool(require_stattrak),
-            require_stattrak=bool(require_stattrak),
-            allow_refresh=False, limit=limit,
-        )
-        return [float(l[0]) for l in lots]
+        # Get real depth from full export index (new format: {norm: {(wear, is_st): count}})
+        depth = None
+        if index is not None:
+            wear_counts = index.get(norm)
+            if wear_counts:
+                key = (target_wear, is_st) if target_wear else None
+                if key and key in wear_counts:
+                    depth = wear_counts[key]
+                elif not target_wear:
+                    # Sum all wears for this skin/st combo
+                    depth = sum(v for (w, st), v in wear_counts.items() if bool(st) == is_st)
+
+        # Get prices from v2/prices cache (accurate USD prices)
+        with self._prices_cache_lock:
+            lots = self._prices_cache.get(norm) or []
+        wear_prices = sorted([
+            float(l[0]) for l in lots
+            if len(l) >= 4 and str(l[2]) == (target_wear or str(l[2]))
+            and bool(l[3]) == is_st and l[0] > 0
+        ])
+        if not wear_prices and target_wear:
+            # Fallback: no ST filter
+            wear_prices = sorted([
+                float(l[0]) for l in lots
+                if len(l) >= 3 and str(l[2]) == target_wear and l[0] > 0
+            ])
+
+        if not wear_prices:
+            # No v2/prices data — fall back to get_listings
+            lots_raw = self.get_listings(
+                skin_name, target_wear=target_wear,
+                exclude_stattrak=not bool(require_stattrak),
+                require_stattrak=bool(require_stattrak),
+                allow_refresh=False, limit=limit,
+            )
+            return [float(l[0]) for l in lots_raw]
+
+        cheapest = wear_prices[0]
+
+        # If we have real depth from full export, simulate price ladder:
+        # use v2/prices volume as depth if full export not available
+        if depth is None:
+            # Use volume from v2/prices (number of copies stored)
+            depth = len(wear_prices)
+
+        # Build price list: cheapest for first lot, then scale up slightly
+        # using the spread between cheapest and next price tier from v2/prices
+        if len(wear_prices) > 1:
+            # v2/prices has multiple price tiers (different volume entries)
+            # Distribute depth across tiers proportionally
+            result = []
+            per_tier = max(1, depth // len(wear_prices))
+            for p in wear_prices:
+                result.extend([p] * per_tier)
+                if len(result) >= depth:
+                    break
+            # Fill remainder with last price
+            while len(result) < depth:
+                result.append(wear_prices[-1])
+            return result[:limit]
+        else:
+            # Only one price tier — all lots at same price
+            return [cheapest] * min(depth, limit)
 
     def load_full_export_index(self) -> bool:
         """
-        Load all full export files and build {normalized_name: [(price, is_stattrak), ...]}
-        index with real individual listing prices.
-        This is slow (~2-3 min) but only needs to run once per price refresh.
-        Stores result in self._full_export_index.
+        Load all full export files and build depth index:
+        {normalized_name: {(wear, is_stattrak): count}}
+        Stores only lot counts — prices come from v2/prices cache.
+        This is ~90% smaller than storing full tuples (~5-10 MB vs 65-130 MB).
         """
         try:
             resp = self._request_json(
@@ -1234,14 +1280,12 @@ class MarketCSGOClient:
                 return False
 
             try:
-                price_idx = fmt.index('price')
                 name_idx = fmt.index('market_hash_name')
             except ValueError:
                 return False
 
-            float_idx = fmt.index('float') if 'float' in fmt else None
-
-            index: Dict[str, List] = {}
+            # index: {norm: {(wear, is_st): count}}
+            index: Dict[str, Dict] = {}
             loaded = 0
 
             for fname in files:
@@ -1256,24 +1300,14 @@ class MarketCSGOClient:
                         continue
                     for row in rows:
                         try:
-                            if not isinstance(row, list) or len(row) <= max(price_idx, name_idx):
+                            if not isinstance(row, list) or len(row) <= name_idx:
                                 continue
-                            price_cents = row[price_idx]
                             mhn = str(row[name_idx] or '')
                             if not mhn or ' | ' not in mhn:
                                 continue
                             if 'souvenir' in mhn.lower():
                                 continue
-                            # Same price parsing as _parse_file_data:
-                            # values >= 1000 are in kopecks/millicents → divide by 1000
-                            # values < 1000 are in cents → divide by 100
-                            raw_val = float(price_cents)
-                            div = 1000.0 if raw_val >= 1000.0 else 100.0
-                            price_usd = raw_val / div
-                            if price_usd <= 0:
-                                continue
 
-                            # Determine wear from market_hash_name
                             wear = None
                             for w in ('Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred'):
                                 if mhn.endswith(f'({w})'):
@@ -1286,9 +1320,11 @@ class MarketCSGOClient:
                             if not norm:
                                 continue
                             is_st = 'stattrak' in mhn.lower()
+
                             if norm not in index:
-                                index[norm] = []
-                            index[norm].append((price_usd, is_st, wear))
+                                index[norm] = {}
+                            key = (wear, is_st)
+                            index[norm][key] = index[norm].get(key, 0) + 1
                         except Exception:
                             continue
                     loaded += 1
@@ -1297,10 +1333,6 @@ class MarketCSGOClient:
 
             if not index:
                 return False
-
-            # Sort each entry by price
-            for k in index:
-                index[k].sort(key=lambda x: x[0])
 
             with self._prices_cache_lock:
                 self._full_export_index = index
@@ -3244,24 +3276,6 @@ class PriceManager:
             allow_refresh=allow_refresh,
         )
     
-    def get_portfolio_value(self, skin_names: List[str], target_wear: str = None, max_float: float = None) -> float:
-        """Рассчитать стоимость портфеля"""
-        total = 0.0
-        for skin_name in skin_names:
-            price = self.get_skin_price(skin_name, target_wear, max_float)
-            if price:
-                total += price
-        return total
-    
-    def get_multiple_prices(self, skin_names: List[str], target_wear: str = None, max_float: float = None) -> Dict[str, float]:
-        """Получить цены для списка скинов"""
-        prices = {}
-        for skin_name in skin_names:
-            price = self.get_skin_price(skin_name, target_wear, max_float)
-            if price:
-                prices[skin_name] = price
-        return prices
-
     def get_listings(
         self,
         skin_name: str,
@@ -3914,52 +3928,6 @@ class PriceManager:
 
         # Fallback: compute on-demand (slow, only for cache misses)
         # Disabled — too slow for bulk calculator use. Return None to use ask price.
-        return None
-
-    def _compute_bid_price(
-        self,
-        skin_name: str,
-        *,
-        target_wear: Optional[str] = None,
-        require_stattrak: bool = False,
-    ) -> Optional[float]:
-        """Internal: compute bid price without caching."""
-        # Primary: suggest_request_price from MC (median-anchored, realistic)
-        mc_req = self.market_client.suggest_request_price(
-            skin_name, target_wear=target_wear, require_stattrak=bool(require_stattrak)
-        )
-        mc_suggested = float(mc_req['suggested_price']) if mc_req and mc_req.get('suggested_price') is not None else None
-
-        # DMarket: suggest_request_price if DM is enabled
-        dm_suggested = None
-        dmc = self.dmarket_client
-        if dmc and bool(getattr(dmc, 'enabled', False)):
-            try:
-                dm_req = dmc.suggest_request_price(
-                    skin_name, target_wear=target_wear, require_stattrak=bool(require_stattrak)
-                )
-                if dm_req and dm_req.get('suggested_price') is not None:
-                    dm_suggested = float(dm_req['suggested_price'])
-            except Exception:
-                pass
-
-        # Return best (lowest realistic) price
-        candidates = [p for p in [mc_suggested, dm_suggested] if p is not None and p > 0]
-        if candidates:
-            return min(candidates)
-
-        # Fallback: raw MC bid from class_instance
-        st_prefix = 'StatTrak\u2122 ' if bool(require_stattrak) else ''
-        mhn = f'{st_prefix}{skin_name} ({target_wear})' if target_wear else f'{st_prefix}{skin_name}'
-        norm = self.market_client._normalize_skin_name(mhn)
-        if bool(require_stattrak):
-            norm = norm + '|st'
-        with self._bid_prices_lock:
-            wears = self._bid_prices.get(norm)
-        if wears:
-            if target_wear and target_wear in wears:
-                return wears[target_wear]
-            return min(wears.values())
         return None
 
     def suggest_request_price(

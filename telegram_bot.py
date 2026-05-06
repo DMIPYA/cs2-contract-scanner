@@ -4,7 +4,6 @@ import asyncio
 import logging
 import html
 import urllib.parse
-from collections import OrderedDict
 import threading
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
@@ -378,6 +377,20 @@ def _normalize_mode(mode: str) -> str:
     return 'PROFIT'
 
 
+def _sort_results_by_mode(results: list, mode: str) -> list:
+    """Sort contract results according to mode: PROFIT by net_profit, SAFE/BID by ROI."""
+    if not results:
+        return results
+    try:
+        if mode == 'PROFIT':
+            return sorted(results, key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
+        if mode in ('SAFE', 'BID'):
+            return sorted(results, key=lambda x: float(x.get('roi') or 0.0), reverse=True)
+    except Exception:
+        pass
+    return results
+
+
 def _format_contract_compact(i: int, c: dict) -> str:
     st = 'ST' if bool(c.get('is_stattrak')) else 'NO'
     out = str(c.get('hunt_output') or '')
@@ -592,18 +605,7 @@ def _render_list(*, svc: TargetHuntingService, mode: str, max_inv: Optional[floa
     mode = _normalize_mode(mode)
     results, meta = svc.get_cached(mode=mode, max_investment=max_inv, limit=200)
 
-    if mode == 'PROFIT' and results:
-        try:
-            results = list(results)
-            results.sort(key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
-        except Exception:
-            pass
-    if mode in ('SAFE', 'BID') and results:
-        try:
-            results = list(results)
-            results.sort(key=lambda x: float(x.get('roi') or 0.0), reverse=True)
-        except Exception:
-            pass
+    results = _sort_results_by_mode(results, mode)
 
     now = time.time()
     ts = float(meta.get('timestamp') or 0.0)
@@ -672,18 +674,7 @@ def _render_details(*, svc: TargetHuntingService, mode: str, max_inv: Optional[f
         if cached_txt:
             return cached_txt
 
-    if mode == 'PROFIT' and results:
-        try:
-            results = list(results)
-            results.sort(key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
-        except Exception:
-            pass
-    if mode in ('SAFE', 'BID') and results:
-        try:
-            results = list(results)
-            results.sort(key=lambda x: float(x.get('roi') or 0.0), reverse=True)
-        except Exception:
-            pass
+    results = _sort_results_by_mode(results, mode)
 
     if idx <= 0 or idx > len(results):
         return "Contract not found (index out of range)."
@@ -835,18 +826,7 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         if cached_txt:
             return cached_txt
 
-    if mode == 'PROFIT' and results:
-        try:
-            results = list(results)
-            results.sort(key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
-        except Exception:
-            pass
-    if mode in ('SAFE', 'BID') and results:
-        try:
-            results = list(results)
-            results.sort(key=lambda x: float(x.get('roi') or 0.0), reverse=True)
-        except Exception:
-            pass
+    results = _sort_results_by_mode(results, mode)
 
     if idx <= 0 or idx > len(results):
         return "Contract not found (index out of range)."

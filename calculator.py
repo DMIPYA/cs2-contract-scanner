@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from collections import defaultdict
 import logging
 import collections
-import itertools
-import math
 import random
 from collections import Counter
 import statistics
@@ -71,14 +69,8 @@ class ContractCalculator:
         except Exception:
             self.csfloat_fee = 0.02
         self._multisource_net_pricing = False
-        self._output_multiplier_threshold = 1.5
-        self._filler_to_target_price_ratio = 0.75
-        self._max_risk_ratio = 10.0
-        self._risk_ratio_override_min_roi = 60.0
-        self._risk_ratio_override_min_profit_probability = 0.25
         self._golden_filler_price_multiplier = 3.0
         self._golden_filler_min_outcomes = 3
-        self._max_worst_case_loss_pct = 0.50
         self._memo_collection_score: Dict[Tuple, Optional[float]] = {}
         self._memo_collection_avg_outcome_price: Dict[Tuple, Optional[float]] = {}
         self._memo_contract_eval: 'collections.OrderedDict[Tuple, Dict]' = collections.OrderedDict()

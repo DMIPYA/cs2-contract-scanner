@@ -14,6 +14,7 @@ import os
 import time
 import logging
 import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -28,9 +29,8 @@ logging.basicConfig(
 logger = logging.getLogger('webapp_server')
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from bot_service import TargetHuntingService
@@ -169,6 +169,10 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
     """Full detail for the detail screen."""
     summary = _serialize_contract_summary(idx, c)
 
+    # Resolve service and price manager once for the whole function
+    _svc_inst = _get_svc()
+    _pm = getattr(_svc_inst, 'price_manager', None)
+
     ins = list(c.get('input_skins') or [])
     
     # Calculate max allowed average float for inputs based on target wear
@@ -248,7 +252,6 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
     # Group inputs by (name, wear, buy_source, collection)
     # Skins with same name/wear/source are merged regardless of individual float values.
     # Float is shown as average across the group.
-    from collections import OrderedDict
     groups: OrderedDict = OrderedDict()
     for s in ins:
         nm = str(s.get('name') or '')
@@ -317,8 +320,6 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
         request_price = None
         if mode != 'BID':
             try:
-                _svc = _get_svc()
-                _pm = getattr(_svc, 'price_manager', None)
                 if _pm is not None and g['buy_source'] != 'CSFLOAT':
                     _req = _pm.suggest_request_price(
                         g['name'],
@@ -335,10 +336,8 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
         # Shows avg_price_for_count to warn when not enough cheap lots exist
         market_depth = None
         try:
-            _svc2 = _get_svc()
-            _pm2 = getattr(_svc2, 'price_manager', None)
-            if _pm2 is not None and g['buy_source'] in ('MARKETCSGO', 'MARKETCSGO_BID', ''):
-                _mc = _pm2.market_client
+            if _pm is not None and g['buy_source'] in ('MARKETCSGO', 'MARKETCSGO_BID', ''):
+                _mc = _pm.market_client
                 _prices = _mc.get_real_listings(
                     g['name'],
                     target_wear=g['wear'] or None,
@@ -388,10 +387,8 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
         # Instant-sell price (best bid on the market)
         instant_sell = None
         try:
-            _svc2 = _get_svc()
-            _pm2 = getattr(_svc2, 'price_manager', None)
-            if _pm2 is not None:
-                _sr = _pm2.suggest_sell_price(
+            if _pm is not None:
+                _sr = _pm.suggest_sell_price(
                     str(o.get('name') or ''),
                     target_wear=wr or None,
                     require_stattrak=bool(c.get('is_stattrak')),
@@ -414,6 +411,27 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
 
     core = f"{int(c.get('main_skins_count') or 0)}/{int(c.get('filler_skins_count') or 0)}"
 
+    # Recalculate input_cost using real market depth avg prices where available
+    real_input_cost = 0.0
+    has_real_cost = False
+    for g in input_groups:
+        md = g.get('market_depth')
+        if md and md.get('avg_price_for_needed') is not None:
+            real_input_cost += round(float(md['avg_price_for_needed']) * int(g['count']), 2)
+            has_real_cost = True
+        else:
+            real_input_cost += float(g.get('total_price') or 0.0)
+
+    if has_real_cost:
+        real_input_cost = round(real_input_cost, 2)
+        ev = float(c.get('expected_output') or 0.0)
+        real_net_profit = round(ev - real_input_cost, 2)
+        real_roi = round((ev - real_input_cost) / real_input_cost * 100.0, 2) if real_input_cost > 0 else 0.0
+    else:
+        real_input_cost = float(c.get('input_cost') or 0.0)
+        real_net_profit = float(c.get('net_profit') or 0.0)
+        real_roi = float(c.get('roi') or 0.0)
+
     detail = dict(summary)
     detail.update({
         'core_filler': core,
@@ -423,6 +441,10 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
         'max_allowed_avg_float': max_allowed_avg_float,
         'max_allowed_wear': max_allowed_wear,
         'bid_mode': mode == 'BID',
+        # Override with real market depth costs
+        'input_cost': real_input_cost,
+        'net_profit': real_net_profit,
+        'roi': real_roi,
     })
     return detail
 

@@ -473,8 +473,6 @@ class TargetHuntingService:
             if cfc is not None and hasattr(cfc, 'reset_session_limits'):
                 if getattr(cfc, '_session_disabled', False):
                     cfc.reset_session_limits()
-            if hasattr(self.calculator, '_float_opt_session_cache'):
-                self.calculator._float_opt_session_cache.clear()
         except Exception:
             pass
 
@@ -758,7 +756,7 @@ class TargetHuntingService:
     def refresh_background(self) -> None:
         """Trigger a background refresh of all modes without blocking."""
         def _run():
-            for m in ['PROFIT', 'SAFE']:
+            for m in ['PROFIT', 'SAFE', 'BID']:
                 try:
                     self.refresh_mode(m)
                 except Exception:
