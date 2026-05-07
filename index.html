@@ -1354,6 +1354,7 @@ document.getElementById('refresh-btn').addEventListener('click', async () => {
 // ════════════════════════════════════════════════════════════════════════════
 
 loadContracts(true);
+loadFavoritesFromServer();
 
 // Auto-refresh every 5 minutes
 setInterval(() => {
@@ -1367,58 +1368,116 @@ setInterval(() => {
 // FAVORITES
 // ════════════════════════════════════════════════════════════════════════════
 
-const FAVORITES_KEY = "crafty_favorites";
+// ── Favorites: server-side storage per Telegram user ──────────────────
+let _favoritesCache = null;  // in-memory cache
+let _favoritesLoaded = false;
 
-function getFavorites() {
-  try { return JSON.parse(localStorage.getItem(FAVORITES_KEY) || "[]"); }
-  catch(e) { return []; }
+function _getTgInitData() {
+  try { return (window.Telegram && window.Telegram.WebApp && window.Telegram.WebApp.initData) || ""; }
+  catch(e) { return ""; }
 }
 
-function saveFavorites(favs) {
-  try { localStorage.setItem(FAVORITES_KEY, JSON.stringify(favs)); } catch(e) {}
+function _favHeaders() {
+  const h = { "Content-Type": "application/json" };
+  const initData = _getTgInitData();
+  if (initData) h["X-Telegram-Init-Data"] = initData;
+  // Dev fallback: use a fixed user id when running locally without Telegram
+  else h["X-Dev-User-Id"] = "dev_user";
+  return h;
+}
+
+function getFavorites() {
+  return _favoritesCache || [];
+}
+
+async function loadFavoritesFromServer() {
+  try {
+    const r = await fetch(`${BASE_URL}/api/favorites`, { headers: _favHeaders() });
+    if (r.ok) {
+      const data = await r.json();
+      _favoritesCache = Array.isArray(data.favorites) ? data.favorites : [];
+      _favoritesLoaded = true;
+    }
+  } catch(e) {
+    // Fallback to localStorage if server unavailable
+    try { _favoritesCache = JSON.parse(localStorage.getItem("crafty_favorites") || "[]"); }
+    catch(e2) { _favoritesCache = []; }
+    _favoritesLoaded = true;
+  }
+}
+
+async function saveFavorites(favs) {
+  _favoritesCache = favs;
+  try {
+    await fetch(`${BASE_URL}/api/favorites`, {
+      method: "POST",
+      headers: _favHeaders(),
+      body: JSON.stringify({ favorites: favs }),
+    });
+  } catch(e) {
+    // Fallback: save to localStorage
+    try { localStorage.setItem("crafty_favorites", JSON.stringify(favs)); } catch(e2) {}
+  }
 }
 
 function isFavorite(idx, mode) {
-  return getFavorites().some(f => f.idx === idx && f.mode === mode);
+  if (!detailData) return false;
+  const favKey = (detailData.collection || "") + "|" + (detailData.name || "") + "|" + (detailData.is_stattrak ? "1" : "0");
+  return getFavorites().some(f => f.fav_key === favKey && f.mode === mode);
 }
 
-function toggleFavorite() {
+async function toggleFavorite() {
   if (!detailData) return;
-  const idx = detailData.idx;
+  // Use stable key: collection + output + is_stattrak (not idx which changes)
+  const favKey = (detailData.collection || "") + "|" + (detailData.name || "") + "|" + (detailData.is_stattrak ? "1" : "0");
   const mode = state.mode;
   let favs = getFavorites();
-  const existing = favs.findIndex(f => f.idx === idx && f.mode === mode);
+  const existing = favs.findIndex(f => f.fav_key === favKey && f.mode === mode);
   if (existing >= 0) {
     favs.splice(existing, 1);
     showToast("Removed from favorites");
   } else {
-    const contract = state.contracts.find(c => c.idx === idx) || {};
+    // Save full snapshot of detail data
     favs.push({
-      idx, mode,
-      name: detailData.name || contract.name || "",
-      collection: detailData.collection || contract.collection || "",
-      roi: detailData.roi || contract.roi || 0,
-      net_profit: detailData.net_profit || contract.net_profit || 0,
-      input_cost: detailData.input_cost || contract.input_cost || 0,
-      rarity: detailData.rarity || contract.rarity || "",
+      fav_key: favKey,
+      mode,
+      name: detailData.name || "",
+      collection: detailData.collection || "",
+      roi: detailData.roi || 0,
+      net_profit: detailData.net_profit || 0,
+      input_cost: detailData.input_cost || 0,
+      expected_output: detailData.expected_output || 0,
+      rarity: detailData.rarity || "",
       is_stattrak: detailData.is_stattrak || false,
+      // Full snapshot for offline display
+      snapshot: {
+        input_groups: detailData.input_groups || [],
+        outcomes: detailData.outcomes || [],
+        core_filler: detailData.core_filler || "",
+        profit_probability: detailData.profit_probability || 0,
+        jackpot_ratio: detailData.jackpot_ratio || 0,
+        chance_of_target: detailData.chance_of_target || 0,
+        expected_wear: detailData.expected_wear || "",
+      },
       saved_at: Date.now(),
     });
     showToast("Added to favorites");
   }
-  saveFavorites(favs);
+  await saveFavorites(favs);
   updateFavBtn();
 }
 
 function updateFavBtn() {
   const btn = document.getElementById("fav-btn");
   if (!btn || !detailData) return;
-  const active = isFavorite(detailData.idx, state.mode);
+  const favKey = (detailData.collection || "") + "|" + (detailData.name || "") + "|" + (detailData.is_stattrak ? "1" : "0");
+  const active = getFavorites().some(f => f.fav_key === favKey && f.mode === state.mode);
   btn.classList.toggle("active", active);
 }
 
-function showFavorites() {
+async function showFavorites() {
   haptic("light");
+  if (!_favoritesLoaded) await loadFavoritesFromServer();
   document.querySelectorAll("#screen-home .nav-item").forEach(n => n.classList.remove("active"));
   const navFav = document.getElementById("nav-favorites");
   if (navFav) navFav.classList.add("active");
@@ -1448,7 +1507,7 @@ function renderFavorites() {
     const skin = parts.slice(1).join(" | ") || f.name || "";
     const modeTag = f.mode === "SAFE" ? "SAFE" : f.mode === "BID" ? "BID" : "PROFIT";
     return `
-<div class="ccard ${CSS.escape(f.rarity || "")}" style="margin:0 14px 8px;cursor:pointer" onclick="openFavoriteDetail(${f.idx},'${f.mode}')">
+<div class="ccard ${CSS.escape(f.rarity || "")}" style="margin:0 14px 8px;cursor:pointer" onclick="openFavoriteDetail('${(f.fav_key||"").replace(/'/g,"\'")}','${f.mode}')">
   <div class="ccard-inner">
     <div class="ccard-top">
       <div>
@@ -1470,14 +1529,72 @@ function renderFavorites() {
   }).join("");
 }
 
-function openFavoriteDetail(idx, mode) {
-  haptic("light");
+async function openFavoriteDetail(favKey, mode) {
+  haptic("medium");
   state.detailOrigin = "favorites";
   state.mode = mode;
   document.querySelectorAll(".mode-btn").forEach(b => {
     b.classList.toggle("active", b.dataset.mode === mode);
   });
-  openDetail(idx);
+
+  // Find the saved favorite
+  const fav = getFavorites().find(f => f.fav_key === favKey && f.mode === mode);
+  if (!fav) return;
+
+  showScreen("screen-detail");
+  document.getElementById("detail-scroll").scrollTop = 0;
+
+  // Show snapshot immediately
+  const snapData = {
+    idx: 0,
+    name: fav.name,
+    collection: fav.collection,
+    roi: fav.roi,
+    net_profit: fav.net_profit,
+    input_cost: fav.input_cost,
+    expected_output: fav.expected_output || 0,
+    rarity: fav.rarity,
+    is_stattrak: fav.is_stattrak,
+    profit_probability: (fav.snapshot || {}).profit_probability || 0,
+    jackpot_ratio: (fav.snapshot || {}).jackpot_ratio || 0,
+    chance_of_target: (fav.snapshot || {}).chance_of_target || 0,
+    core_filler: (fav.snapshot || {}).core_filler || "",
+    expected_wear: (fav.snapshot || {}).expected_wear || "",
+    input_groups: (fav.snapshot || {}).input_groups || [],
+    outcomes: (fav.snapshot || {}).outcomes || [],
+    max_allowed_avg_float: null,
+    max_allowed_wear: null,
+    bid_mode: false,
+    _is_snapshot: true,
+  };
+  detailData = snapData;
+  renderDetailFull(snapData);
+
+  // Show snapshot badge
+  const label = document.getElementById("detail-label");
+  if (label) label.textContent = (fav.mode || "PROFIT") + " · " + (fav.is_stattrak ? "StatTrak" : "Normal") + " · SAVED";
+
+  // Try to fetch live data in background
+  try {
+    const parts = favKey.split("|");
+    const collection = parts[0] || "";
+    const output = parts[1] || "";
+    const is_st = parts[2] === "1";
+    const url = `${BASE_URL}/api/contract/find?collection=${encodeURIComponent(collection)}&output=${encodeURIComponent(output)}&is_stattrak=${is_st}&mode=${mode}`;
+    const r = await fetch(url);
+    if (r.ok) {
+      const live = await r.json();
+      if (live && live.found) {
+        live._is_snapshot = false;
+        detailData = live;
+        renderDetailFull(live);
+        const lbl = document.getElementById("detail-label");
+        if (lbl) lbl.textContent = (mode || "PROFIT") + " · " + (is_st ? "StatTrak" : "Normal") + " · LIVE";
+      }
+    }
+  } catch(e) {
+    // Keep showing snapshot
+  }
 }
 
 const _origRenderDetailFull = renderDetailFull;

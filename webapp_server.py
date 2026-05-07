@@ -12,6 +12,9 @@ The WEBAPP_URL in .env must point to this server (public HTTPS URL for Telegram)
 
 import os
 import time
+import json
+import hmac
+import hashlib
 import logging
 import threading
 from collections import OrderedDict
@@ -28,7 +31,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger('webapp_server')
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
@@ -607,6 +610,96 @@ async def api_status() -> dict:
         return {'ok': False, 'error': str(e)}
 
 
+# ── Favorites storage ────────────────────────────────────────────────────────
+
+_FAVORITES_DIR = Path(os.getenv('FAVORITES_DIR', '/app/favorites') if os.path.exists('/app') else 'favorites')
+_favorites_lock = threading.Lock()
+
+
+def _get_favorites_path(user_id: str) -> Path:
+    _FAVORITES_DIR.mkdir(parents=True, exist_ok=True)
+    safe_id = str(user_id).replace('/', '').replace('..', '').strip()[:32]
+    return _FAVORITES_DIR / f'fav_{safe_id}.json'
+
+
+def _verify_telegram_init_data(init_data: str) -> Optional[str]:
+    """
+    Verify Telegram WebApp initData and return user_id if valid.
+    Returns None if invalid or bot token not set.
+    """
+    bot_token = str(os.getenv('TELEGRAM_BOT_TOKEN') or '').strip()
+    if not bot_token or not init_data:
+        return None
+    try:
+        import urllib.parse
+        parsed = dict(urllib.parse.parse_qsl(init_data, keep_blank_values=True))
+        hash_val = parsed.pop('hash', '')
+        if not hash_val:
+            return None
+        # Build data-check-string
+        data_check = '\n'.join(f'{k}={v}' for k, v in sorted(parsed.items()))
+        secret_key = hmac.new(b'WebAppData', bot_token.encode(), hashlib.sha256).digest()
+        expected = hmac.new(secret_key, data_check.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, hash_val):
+            return None
+        # Extract user_id
+        user_str = parsed.get('user', '{}')
+        user = json.loads(user_str)
+        uid = str(user.get('id') or '')
+        return uid if uid else None
+    except Exception:
+        return None
+
+
+@app.get('/api/favorites')
+async def api_favorites_get(request: Request) -> dict:
+    """Get favorites for the current Telegram user."""
+    init_data = request.headers.get('X-Telegram-Init-Data', '')
+    user_id = _verify_telegram_init_data(init_data)
+    if not user_id:
+        # Dev fallback: allow without auth if no bot token configured
+        user_id = request.headers.get('X-Dev-User-Id', '')
+        if not user_id:
+            raise HTTPException(status_code=401, detail='Unauthorized')
+
+    path = _get_favorites_path(user_id)
+    with _favorites_lock:
+        if path.exists():
+            try:
+                favs = json.loads(path.read_text(encoding='utf-8'))
+                return {'ok': True, 'favorites': favs if isinstance(favs, list) else []}
+            except Exception:
+                pass
+    return {'ok': True, 'favorites': []}
+
+
+@app.post('/api/favorites')
+async def api_favorites_save(request: Request) -> dict:
+    """Save favorites for the current Telegram user."""
+    init_data = request.headers.get('X-Telegram-Init-Data', '')
+    user_id = _verify_telegram_init_data(init_data)
+    if not user_id:
+        user_id = request.headers.get('X-Dev-User-Id', '')
+        if not user_id:
+            raise HTTPException(status_code=401, detail='Unauthorized')
+
+    try:
+        body = await request.json()
+        favs = body.get('favorites', [])
+        if not isinstance(favs, list):
+            raise HTTPException(status_code=400, detail='favorites must be a list')
+        # Limit size
+        favs = favs[:200]
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    path = _get_favorites_path(user_id)
+    with _favorites_lock:
+        path.write_text(json.dumps(favs, ensure_ascii=False), encoding='utf-8')
+
+    return {'ok': True, 'saved': len(favs)}
+
+
 @app.post('/api/refresh')
 async def api_refresh() -> dict:
     """Force refresh of price cache and contract calculations"""
@@ -618,6 +711,70 @@ async def api_refresh() -> dict:
     except Exception as e:
         logger.exception('Mini App refresh failed')
         return {'ok': False, 'error': str(e)}
+
+
+@app.get('/api/contract/find')
+async def api_contract_find(
+    collection: str = Query(''),
+    output: str = Query(''),
+    is_stattrak: bool = Query(False),
+    mode: str = Query('PROFIT'),
+) -> dict:
+    """
+    Find a contract by its unique key (collection, output skin, is_stattrak).
+    Returns full detail if found, or {'found': False} if not in current cache.
+    Used by Favorites to check if a saved contract is still available.
+    """
+    mode = _normalize_mode(mode)
+    if not collection or not output:
+        return {'found': False}
+
+    try:
+        svc = _get_svc()
+    except Exception:
+        return {'found': False}
+
+    results, meta = svc.get_cached(mode=mode, max_investment=None, limit=200)
+    if not meta.get('ready') or not results:
+        return {'found': False}
+
+    # Sort same as list endpoint
+    if mode == 'PROFIT':
+        try:
+            results = sorted(results, key=lambda x: float(x.get('net_profit') or 0.0), reverse=True)
+        except Exception:
+            pass
+    elif mode in ('SAFE', 'BID'):
+        try:
+            results = sorted(results, key=lambda x: float(x.get('roi') or 0.0), reverse=True)
+        except Exception:
+            pass
+
+    # Find by unique key
+    col_lower = collection.strip().lower()
+    out_lower = output.strip().lower()
+    for i, c in enumerate(results, start=1):
+        c_col = str(c.get('target_collection') or '').strip().lower()
+        c_out = str(c.get('hunt_output') or '').strip().lower()
+        c_st = bool(c.get('is_stattrak'))
+        if c_col == col_lower and c_out == out_lower and c_st == bool(is_stattrak):
+            # Ensure outcomes computed
+            if not c.get('outcomes'):
+                try:
+                    calc = getattr(svc, 'calculator', None)
+                    if calc is not None:
+                        ins = list(c.get('input_skins') or [])
+                        if ins:
+                            outs = calc.calculate_contract_outcomes_details(ins, is_stattrak=c_st)
+                            c['outcomes'] = sorted(outs or [], key=lambda x: float(x.get('price') or 0.0), reverse=True)
+                except Exception:
+                    pass
+            detail = _serialize_contract_detail(i, c, mode=mode)
+            detail['found'] = True
+            detail['current_idx'] = i
+            return detail
+
+    return {'found': False}
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
