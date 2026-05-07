@@ -443,6 +443,19 @@ body {
 }
 .mode-btn.active { color: var(--orange); border-bottom-color: var(--orange); }
 
+/* ── fav button ── */
+.fav-btn {
+  width: 36px; height: 36px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; flex-shrink: 0; opacity: .7; transition: opacity .15s;
+}
+.fav-btn:active { opacity: 1; }
+.fav-btn.active svg path { fill: var(--gold); stroke: var(--gold); }
+.fav-btn svg path { stroke: var(--text3); }
+
+/* ── favorites screen ── */
+.fav-empty { text-align: center; padding: 60px 24px; color: var(--text3); font-size: 13px; line-height: 1.7; }
+.fav-empty svg { opacity: .3; margin-bottom: 12px; }
+
 /* ── toast ── */
 #toast {
   position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
@@ -565,7 +578,7 @@ body {
 
     <!-- Bottom nav -->
     <div class="bottom-nav">
-      <div class="nav-item active" id="nav-home">
+      <div class="nav-item active" id="nav-home" onclick="goHome()">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 10L10 3L17 10V17H13V13H7V17H3V10Z" stroke-width="1.4" fill="none"/></svg>
         <span class="nav-lbl">Home</span>
       </div>
@@ -573,9 +586,9 @@ body {
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke-width="1.4"/><path d="M6 8H14M6 12H10" stroke-width="1.4" stroke-linecap="round"/></svg>
         <span class="nav-lbl">Mode</span>
       </div>
-      <div class="nav-item">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="7" stroke-width="1.4"/><path d="M10 9V14M10 7V7.5" stroke-width="1.4" stroke-linecap="round"/></svg>
-        <span class="nav-lbl">Guide</span>
+      <div class="nav-item" id="nav-favorites" onclick="showFavorites()">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2.5L12.1 7.6L17.5 8.1L13.5 11.7L14.7 17L10 14.3L5.3 17L6.5 11.7L2.5 8.1L7.9 7.6Z" stroke-width="1.4" stroke-linejoin="round"/></svg>
+        <span class="nav-lbl">Favorites</span>
       </div>
       <div class="nav-item">
         <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="3" stroke-width="1.4"/><path d="M10 2V4.5M10 15.5V18M2 10H4.5M15.5 10H18M4.6 4.6L6.5 6.5M13.5 13.5L15.4 15.4M4.6 15.4L6.5 13.5M13.5 6.5L15.4 4.6" stroke-width="1.4" stroke-linecap="round"/></svg>
@@ -596,6 +609,9 @@ body {
       <div class="detail-title-block">
         <div class="detail-label" id="detail-label"></div>
         <div class="detail-name" id="detail-name"></div>
+      </div>
+      <div class="fav-btn" id="fav-btn" onclick="toggleFavorite()" title="Add to favorites">
+        <svg width="24" height="24" viewBox="0 0 20 20" fill="none" id="fav-icon"><path d="M10 2.5L12.1 7.6L17.5 8.1L13.5 11.7L14.7 17L10 14.3L5.3 17L6.5 11.7L2.5 8.1L7.9 7.6Z" stroke-width="1.4" stroke-linejoin="round"/></svg>
       </div>
       <div class="detail-roi" id="detail-roi"></div>
     </div>
@@ -673,6 +689,43 @@ body {
 
 </div>
 
+  <!-- ════════════════ FAVORITES SCREEN ════════════════ -->
+  <div id="screen-favorites" class="screen">
+    <!-- Header -->
+    <div class="header">
+      <div class="logo-hex"><div class="logo-hex-arrow"></div></div>
+      <div class="logo-text">
+        <div class="logo-title">Crafty</div>
+        <div class="logo-sub">Favorites</div>
+      </div>
+      <div class="header-right">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="opacity:.6"><path d="M10 2.5L12.1 7.6L17.5 8.1L13.5 11.7L14.7 17L10 14.3L5.3 17L6.5 11.7L2.5 8.1L7.9 7.6Z" stroke-width="1.4" stroke-linejoin="round" fill="var(--gold)" stroke="var(--gold)"/></svg>
+      </div>
+    </div>
+    <div class="scroll-area" id="favorites-scroll">
+      <div id="favorites-list" style="padding:8px 0 100px"></div>
+    </div>
+    <!-- Bottom nav -->
+    <div class="bottom-nav">
+      <div class="nav-item" id="fav-nav-home" onclick="goHome()">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 10L10 3L17 10V17H13V13H7V17H3V10Z" stroke-width="1.4" fill="none"/></svg>
+        <span class="nav-lbl">Home</span>
+      </div>
+      <div class="nav-item" id="fav-nav-mode" onclick="goHome()">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="3" y="3" width="14" height="14" rx="2" stroke-width="1.4"/><path d="M6 8H14M6 12H10" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span class="nav-lbl">Mode</span>
+      </div>
+      <div class="nav-item" id="fav-nav-favorites">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M10 2.5L12.1 7.6L17.5 8.1L13.5 11.7L14.7 17L10 14.3L5.3 17L6.5 11.7L2.5 8.1L7.9 7.6Z" stroke-width="1.4" stroke-linejoin="round"/></svg>
+        <span class="nav-lbl">Favorites</span>
+      </div>
+      <div class="nav-item">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="3" stroke-width="1.4"/><path d="M10 2V4.5M10 15.5V18M2 10H4.5M15.5 10H18M4.6 4.6L6.5 6.5M13.5 13.5L15.4 15.4M4.6 15.4L6.5 13.5M13.5 6.5L15.4 4.6" stroke-width="1.4" stroke-linecap="round"/></svg>
+        <span class="nav-lbl">Settings</span>
+      </div>
+    </div>
+  </div>
+
 <!-- Toast -->
 <div id="toast"></div>
 
@@ -746,6 +799,7 @@ const state = {
   loading: false,
   cacheAge: null,
   sort: 'profit',
+  detailOrigin: 'home',
 };
 
 let detailData = null;
@@ -766,7 +820,15 @@ function showScreen(id) {
 
 function goHome() {
   haptic('light');
+  if (state.detailOrigin === 'favorites') {
+    state.detailOrigin = 'home';
+    showFavorites();
+    return;
+  }
   showScreen('screen-home');
+  document.querySelectorAll('#screen-home .nav-item').forEach(n => n.classList.remove('active'));
+  const navHome = document.getElementById('nav-home');
+  if (navHome) navHome.classList.add('active');
 }
 
 document.getElementById('back-btn').addEventListener('click', goHome);
@@ -1055,6 +1117,7 @@ async function loadContracts(showSkeleton = true) {
 
 async function openDetail(idx) {
   haptic('medium');
+  if (state.detailOrigin !== 'favorites') state.detailOrigin = 'home';
   showScreen('screen-detail');
 
   // Reset scroll
@@ -1298,6 +1361,131 @@ setInterval(() => {
     loadContracts(false);
   }
 }, 5 * 60 * 1000);
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// FAVORITES
+// ════════════════════════════════════════════════════════════════════════════
+
+const FAVORITES_KEY = "crafty_favorites";
+
+function getFavorites() {
+  try { return JSON.parse(localStorage.getItem(FAVORITES_KEY) || "[]"); }
+  catch(e) { return []; }
+}
+
+function saveFavorites(favs) {
+  try { localStorage.setItem(FAVORITES_KEY, JSON.stringify(favs)); } catch(e) {}
+}
+
+function isFavorite(idx, mode) {
+  return getFavorites().some(f => f.idx === idx && f.mode === mode);
+}
+
+function toggleFavorite() {
+  if (!detailData) return;
+  const idx = detailData.idx;
+  const mode = state.mode;
+  let favs = getFavorites();
+  const existing = favs.findIndex(f => f.idx === idx && f.mode === mode);
+  if (existing >= 0) {
+    favs.splice(existing, 1);
+    showToast("Removed from favorites");
+  } else {
+    const contract = state.contracts.find(c => c.idx === idx) || {};
+    favs.push({
+      idx, mode,
+      name: detailData.name || contract.name || "",
+      collection: detailData.collection || contract.collection || "",
+      roi: detailData.roi || contract.roi || 0,
+      net_profit: detailData.net_profit || contract.net_profit || 0,
+      input_cost: detailData.input_cost || contract.input_cost || 0,
+      rarity: detailData.rarity || contract.rarity || "",
+      is_stattrak: detailData.is_stattrak || false,
+      saved_at: Date.now(),
+    });
+    showToast("Added to favorites");
+  }
+  saveFavorites(favs);
+  updateFavBtn();
+}
+
+function updateFavBtn() {
+  const btn = document.getElementById("fav-btn");
+  if (!btn || !detailData) return;
+  const active = isFavorite(detailData.idx, state.mode);
+  btn.classList.toggle("active", active);
+}
+
+function showFavorites() {
+  haptic("light");
+  document.querySelectorAll("#screen-home .nav-item").forEach(n => n.classList.remove("active"));
+  const navFav = document.getElementById("nav-favorites");
+  if (navFav) navFav.classList.add("active");
+  document.querySelectorAll("#screen-favorites .nav-item").forEach(n => n.classList.remove("active"));
+  const favNavFav = document.getElementById("fav-nav-favorites");
+  if (favNavFav) favNavFav.classList.add("active");
+  showScreen("screen-favorites");
+  renderFavorites();
+}
+
+function renderFavorites() {
+  const list = document.getElementById("favorites-list");
+  const favs = getFavorites();
+  if (favs.length === 0) {
+    list.innerHTML = `<div class="fav-empty">
+      <svg width="40" height="40" viewBox="0 0 20 20" fill="none"><path d="M10 2.5L12.1 7.6L17.5 8.1L13.5 11.7L14.7 17L10 14.3L5.3 17L6.5 11.7L2.5 8.1L7.9 7.6Z" stroke-width="1.4" stroke-linejoin="round" stroke="var(--text3)"/></svg>
+      <div>No favorites yet.<br>Tap ★ in contract details to save.</div>
+    </div>`;
+    return;
+  }
+  const sorted = [...favs].sort((a, b) => (b.saved_at || 0) - (a.saved_at || 0));
+  list.innerHTML = sorted.map(f => {
+    const roi = parseFloat(f.roi) || 0;
+    const profit = parseFloat(f.net_profit) || 0;
+    const parts = (f.name || "").split(" | ");
+    const weapon = parts[0] || "";
+    const skin = parts.slice(1).join(" | ") || f.name || "";
+    const modeTag = f.mode === "SAFE" ? "SAFE" : f.mode === "BID" ? "BID" : "PROFIT";
+    return `
+<div class="ccard ${CSS.escape(f.rarity || "")}" style="margin:0 14px 8px;cursor:pointer" onclick="openFavoriteDetail(${f.idx},'${f.mode}')">
+  <div class="ccard-inner">
+    <div class="ccard-top">
+      <div>
+        <div class="ccard-weapon">${escHtml(weapon)} · <span style="color:var(--text4)">${modeTag}</span></div>
+        <div class="ccard-name">${escHtml(skin)}</div>
+      </div>
+      <div class="ccard-profit">
+        <div class="ccard-pct ${roi < 0 ? "red" : ""}">${roi >= 0 ? "+" : ""}${roi.toFixed(1)}%</div>
+        <div class="ccard-pct-lbl">ROI</div>
+      </div>
+    </div>
+    <div class="ccard-prices">
+      <div class="price-block"><div class="price-lbl">Cost</div><div class="price-val">$${fmt$(f.input_cost)}</div></div>
+      <div class="price-block"><div class="price-lbl">Profit</div><div class="price-val ${profit < 0 ? "red" : "profit"}">${profit >= 0 ? "+" : ""}$${fmt$(profit)}</div></div>
+      <div class="price-block"><div class="price-lbl">Collection</div><div class="price-val" style="font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(f.collection || "")}</div></div>
+    </div>
+  </div>
+</div>`;
+  }).join("");
+}
+
+function openFavoriteDetail(idx, mode) {
+  haptic("light");
+  state.detailOrigin = "favorites";
+  state.mode = mode;
+  document.querySelectorAll(".mode-btn").forEach(b => {
+    b.classList.toggle("active", b.dataset.mode === mode);
+  });
+  openDetail(idx);
+}
+
+const _origRenderDetailFull = renderDetailFull;
+renderDetailFull = function(c) {
+  _origRenderDetailFull(c);
+  updateFavBtn();
+};
+
 </script>
 </body>
 </html>
