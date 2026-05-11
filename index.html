@@ -1201,7 +1201,7 @@ function renderDetailFull(c) {
     inputsList.innerHTML = '<div style="color:var(--text3);font-size:11px;padding:8px 0">No input data</div>';
   } else {
     inputsList.innerHTML = groups.map((g, gIdx) => {
-      const rangeLabel = g.start === g.end ? `${String(g.start).padStart(2,'0')}` : `${String(g.start).padStart(2,'0')}–${String(g.end).padStart(2,'0')}`;
+      const rangeLabel = `${g.count}x`;
       // Use real market depth avg if available, else per_item
       const realAvg = g.market_depth && g.market_depth.avg_price_for_needed ? g.market_depth.avg_price_for_needed : null;
       const realTotal = realAvg ? realAvg * g.count : null;

@@ -253,6 +253,3 @@ class CS2Database:
     def list_collections(self) -> List[str]:
         """Получить список всех коллекций"""
         return list(self.collections.keys())
-        for collection in milspec_collections[:5]:  # первые 5
-            milspec_count = len(self.get_skins_by_rarity("Mil-Spec", collection))
-            print(f"  {collection}: {milspec_count} Mil-Spec")
