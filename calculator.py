@@ -4817,8 +4817,11 @@ class ContractCalculator:
         return 'Battle-Scarred'
 
     def calculate_contract_outcomes_details(self, contract_skins: List[Dict], is_stattrak: bool) -> List[Dict]:
-        avg_float = self._calculate_average_float(contract_skins)
-        avg_float = max(0.0, min(1.0, float(avg_float)))
+        avg_norm = self._calculate_average_normalized_float(contract_skins)
+        if avg_norm < 0.0:
+            avg_norm = 0.0
+        if avg_norm > 1.0:
+            avg_norm = 1.0
         input_rarity = contract_skins[0].get('rarity') if contract_skins else None
         if not input_rarity:
             return []
@@ -4867,7 +4870,7 @@ class ContractCalculator:
                 if max_f <= min_f + 1e-9:
                     min_f, max_f = 0.0, 1.0
 
-                out_float = float(avg_float)
+                out_float = float(avg_norm) * (max_f - min_f) + min_f
                 wear = self._determine_wear_from_float(out_float)
 
                 # Ensure the computed wear exists for this skin. If not, degrade to the nearest worse available wear.
@@ -4993,8 +4996,8 @@ class ContractCalculator:
         net_profit = ev_after_fee - input_cost
         roi = (net_profit / input_cost) * 100 if input_cost > 0 else 0
 
-        # Wear is determined by the raw average float of inputs, not normalized
-        achievable_wear = self._determine_best_achievable_wear(avg_float)
+        # Align with external calculators: wear is determined by the normalized average float (f')
+        achievable_wear = self._determine_best_achievable_wear(avg_norm_float)
 
         return {
             'input_cost': input_cost,
