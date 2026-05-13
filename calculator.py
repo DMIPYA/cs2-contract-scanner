@@ -329,28 +329,31 @@ class ContractCalculator:
                             if not pi:
                                 continue
                             price, skin_float, wear = pi
-                            if price and float(price) > 0 and skin_float is not None:
+                            worst_case = self._estimate_float_from_wear(wear)
+                            if worst_case is not None:
+                                skin_float = worst_case
+                            if price and float(price) > 0:
                                 merged.append({
                                     'name': nm,
                                     'collection': collection_name,
                                     'price': float(price),
-                                    'float': float(skin_float),
+                                    'float': float(skin_float) if skin_float is not None else 0.0,
                                     'wear': str(wear or ''),
                                     'rarity': rarity_norm,
                                     'instance_key': f"{nm}|dbg",
                                 })
                                 added_any = True
                                 break
-                        self._logger.info(
-                            'HuntDebugInputs coll=%s rarity=%s ST=%s want_nm=%s present_before=%s candidates=%s added=%s',
-                            str(collection_name),
-                            str(rarity_norm),
-                            'Y' if bool(is_stattrak) else 'N',
-                            str(os.getenv('HUNT_DEBUG_EVAL_NAME', '') or ''),
-                            'Y' if bool(has_nm) else 'N',
-                            str(candidates[:5]),
-                            'Y' if bool(added_any) else 'N',
-                        )
+                    self._logger.info(
+                        'HuntDebugInputs coll=%s rarity=%s ST=%s want_nm=%s present_before=%s candidates=%s added=%s',
+                        str(collection_name),
+                        str(rarity_norm),
+                        'Y' if bool(is_stattrak) else 'N',
+                        str(os.getenv('HUNT_DEBUG_EVAL_NAME', '') or ''),
+                        'Y' if bool(has_nm) else 'N',
+                        str(candidates[:5]),
+                        'Y' if bool(added_any) else 'N',
+                    )
         except Exception:
             pass
         return list(merged)
@@ -507,23 +510,22 @@ class ContractCalculator:
                     expanded.append(dict(it))
                 continue
 
-            for price, lot_float, wear in lots:
-                if len(expanded) >= int(limit):
-                    break
-                if lot_float is None:
-                    # If float not present, estimate from wear to avoid creating 10 identical None-floats.
-                    lot_float = self._estimate_float_from_wear(wear)
-                if lot_float is None:
-                    continue
-                if max_float is not None and float(lot_float) > float(max_float):
-                    continue
+        for price, lot_float, wear in lots:
+            if len(expanded) >= int(limit):
+                break
+            worst_case_float = self._estimate_float_from_wear(wear)
+            if worst_case_float is None:
+                continue
+            lot_float = worst_case_float
+            if max_float is not None and float(lot_float) > float(max_float):
+                continue
 
-                d = dict(it)
-                d['price'] = float(price)
-                d['float'] = float(lot_float)
-                d['wear'] = str(wear)
-                d['instance_key'] = f"{name}|{float(price):.4f}|{float(lot_float):.5f}|{wear}"
-                expanded.append(d)
+            d = dict(it)
+            d['price'] = float(price)
+            d['float'] = float(lot_float)
+            d['wear'] = str(wear)
+            d['instance_key'] = f"{name}|{float(price):.4f}|{float(lot_float):.5f}|{wear}"
+            expanded.append(d)
 
         return expanded[: int(limit)]
 
@@ -639,28 +641,29 @@ class ContractCalculator:
                     self._memo_contract_craftability[key] = dict(result)
                 return dict(result)
 
-            cap = s.get('float')
-            try:
-                cap_f = float(cap) if cap is not None else None
-            except Exception:
-                cap_f = None
-            if cap_f is None:
-                cap_f = self._estimate_float_from_wear(s.get('wear'))
-            if cap_f is None:
-                if not bool(allow_unknown_float):
-                    result = {
-                        'craftable': False,
-                        'reason': 'unknown_required_float',
-                        'min_depth': 0,
-                        'limiting_skin': skin_name,
-                        'required_slots': 1,
-                        'matched_slots': 0,
-                    }
-                    with self._memo_lock:
-                        self._memo_contract_craftability[key] = dict(result)
-                    return dict(result)
-                cap_f = 1.0
-            required_by_skin[skin_name].append(float(cap_f))
+        cap = s.get('float')
+        try:
+            cap_f = float(cap) if cap is not None else None
+        except Exception:
+            cap_f = None
+        worst_case = self._estimate_float_from_wear(s.get('wear'))
+        if worst_case is not None:
+            cap_f = worst_case
+        if cap_f is None:
+            if not bool(allow_unknown_float):
+                result = {
+                    'craftable': False,
+                    'reason': 'unknown_required_float',
+                    'min_depth': 0,
+                    'limiting_skin': skin_name,
+                    'required_slots': 1,
+                    'matched_slots': 0,
+                }
+                with self._memo_lock:
+                    self._memo_contract_craftability[key] = dict(result)
+                return dict(result)
+            cap_f = 1.0
+        required_by_skin[skin_name].append(float(cap_f))
 
         min_depth = None
         limiting_skin = None
@@ -686,15 +689,17 @@ class ContractCalculator:
             except Exception:
                 lots = []
 
-            normalized_lots: List[Tuple[float, float, str]] = []
-            for price, lot_float, wear in list(lots or []):
+        normalized_lots: List[Tuple[float, float, str]] = []
+        for price, lot_float, wear in list(lots or []):
+            worst_case = self._estimate_float_from_wear(wear)
+            if worst_case is not None:
+                lf = worst_case
+            elif lot_float is not None:
                 lf = lot_float
-                if lf is None:
-                    lf = self._estimate_float_from_wear(wear)
-                if lf is None:
-                    if not bool(allow_unknown_float):
-                        continue
-                    lf = 1.0
+            else:
+                if not bool(allow_unknown_float):
+                    continue
+                lf = 1.0
                 try:
                     lf2 = float(lf)
                 except Exception:
@@ -1300,18 +1305,18 @@ class ContractCalculator:
                     wear_thr = {
                         'Factory New': 0.07,
                         'Minimal Wear': 0.15,
-                        'Field-Tested': 0.38,
-                        'Well-Worn': 0.45,
-                        'Battle-Scarred': 1.0,
-                    }
-                    try:
-                        prefer_in_norm_max = float(wear_thr.get(prefer_wear, 0.07))
-                    except Exception:
-                        prefer_in_norm_max = 0.07
-                    try:
-                        float_penalty_mult = float(os.getenv('HUNT_FLOAT_PENALTY_MULT', '1.5') or 1.5)
-                    except Exception:
-                        float_penalty_mult = 1.5
+                    'Field-Tested': 0.37,
+                    'Well-Worn': 0.45,
+                    'Battle-Scarred': 1.0,
+                }
+                try:
+                    prefer_in_norm_max = float(wear_thr.get(prefer_wear, 0.07))
+                except Exception:
+                    prefer_in_norm_max = 0.07
+                try:
+                    float_penalty_mult = float(os.getenv('HUNT_FLOAT_PENALTY_MULT', '1.5') or 1.5)
+                except Exception:
+                    float_penalty_mult = 1.5
 
                     def _stack_sort_key(x: Dict) -> float:
                         try:
@@ -2152,10 +2157,11 @@ class ContractCalculator:
         wear_thresholds = {
             'Factory New': 0.07,
             'Minimal Wear': 0.15,
-            'Field-Tested': 0.38,
-            'Well-Worn': 0.45,
-            'Battle-Scarred': 1.0,
-        }
+    'Field-Tested': 0.37,
+    'Well-Worn': 0.45,
+    'Battle-Scarred': 1.0,
+}
+
         
         target_max_avg_norm = float(wear_thresholds.get(target_wear, 0.07))
         # Safety margin: aim for 99.8% of the threshold to avoid rounding issues
@@ -4004,7 +4010,7 @@ class ContractCalculator:
                     if avg_norm_float <= (0.15 + 1e-9):
                         expected_wear = 'Minimal Wear'
                         break
-                    if avg_norm_float <= (0.38 + 1e-9):
+                    if avg_norm_float <= (0.37 + 1e-9):
                         expected_wear = 'Field-Tested'
                         break
                     # avg_norm_float > 0.15 even with this threshold — try next
@@ -4392,30 +4398,20 @@ class ContractCalculator:
                     require_stattrak=bool(is_stattrak),
                     strict_name_match=False,
                     allow_refresh=False,
-                )
+                    )
             if not price_info:
                 continue
             price, skin_float, wear = price_info
             if skin_float is None and max_float is not None and float(max_float) < 0.999:
-                # v2 prices: float часто отсутствует. Не подставляем порог автоматически,
-                # иначе можно взять Battle-Scarred по цене и ошибочно считать его MW.
-                # Разрешаем только если wear явно в рамках порога.
                 allowed_wears = ["Factory New", "Minimal Wear"]
                 if float(max_float) >= 0.37:
                     allowed_wears.append("Field-Tested")
-                if wear in allowed_wears:
-                    if wear == "Factory New":
-                        skin_float = 0.07
-                    elif wear == "Minimal Wear":
-                        skin_float = 0.15
-                    else:
-                        skin_float = 0.37
-                else:
+                if wear not in allowed_wears:
                     continue
-            if skin_float is None:
-                skin_float = self._estimate_float_from_wear(wear)
-            if skin_float is None:
+            worst_case_float = self._estimate_float_from_wear(wear)
+            if worst_case_float is None:
                 continue
+            skin_float = worst_case_float
             if max_float is not None and float(skin_float) > float(max_float):
                 continue
             if price and price > 0:
@@ -4499,24 +4495,15 @@ class ContractCalculator:
                     continue
                 price, skin_float, wear = price_info
                 if skin_float is None and max_float_threshold is not None and float(max_float_threshold) < 0.999:
-                    # v2 prices: float часто отсутствует. Не подставляем порог автоматически,
-                    # иначе можно взять BS/WW по цене и ошибочно считать его MW.
                     allowed_wears = ["Factory New", "Minimal Wear"]
                     if float(max_float_threshold) >= 0.37:
                         allowed_wears.append("Field-Tested")
-                    if wear in allowed_wears:
-                        if wear == "Factory New":
-                            skin_float = 0.07
-                        elif wear == "Minimal Wear":
-                            skin_float = 0.15
-                        else:
-                            skin_float = 0.37
-                    else:
+                    if wear not in allowed_wears:
                         continue
-                if skin_float is None:
-                    skin_float = self._estimate_float_from_wear(wear)
-                if skin_float is None:
+                worst_case_float = self._estimate_float_from_wear(wear)
+                if worst_case_float is None:
                     continue
+                skin_float = worst_case_float
                 if max_price is not None and price is not None and float(price) > float(max_price):
                     continue
                 if max_float_threshold is not None and float(skin_float) > float(max_float_threshold):
@@ -4588,13 +4575,13 @@ class ContractCalculator:
                 strict_name_match=False,
                 allow_refresh=False,
             )
-            
+
             if price_info:
                 price, skin_float, wear = price_info
-                if skin_float is None:
-                    skin_float = self._estimate_float_from_wear(wear)
-                if skin_float is None:
+                worst_case_float = self._estimate_float_from_wear(wear)
+                if worst_case_float is None:
                     continue
+                skin_float = worst_case_float
                 if max_price is not None and price is not None and price > max_price:
                     continue
                 if skin_float < target_float_threshold:
@@ -4791,10 +4778,11 @@ class ContractCalculator:
         wear_thresholds = {
             'Factory New': 0.07,
             'Minimal Wear': 0.15,
-            'Field-Tested': 0.38,
-            'Well-Worn': 0.45,
-            'Battle-Scarred': 1.0
-        }
+        'Field-Tested': 0.37,
+        'Well-Worn': 0.45,
+        'Battle-Scarred': 1.0
+    }
+
         
         for wear_name, threshold in wear_thresholds.items():
             if average_float <= threshold:
@@ -4806,7 +4794,7 @@ class ContractCalculator:
         wear_thresholds = [
             ('Factory New', 0.07),
             ('Minimal Wear', 0.15),
-            ('Field-Tested', 0.38),
+            ('Field-Tested', 0.37),
             ('Well-Worn', 0.45),
             ('Battle-Scarred', 1.0),
         ]
