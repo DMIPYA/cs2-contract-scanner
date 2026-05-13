@@ -2667,15 +2667,15 @@ class ContractCalculator:
             return None
         w = str(wear)
         if w == 'Factory New':
-            return 0.035
+            return 0.0699
         if w == 'Minimal Wear':
-            return 0.11
+            return 0.1499
         if w == 'Field-Tested':
-            return 0.26
+            return 0.3799
         if w == 'Well-Worn':
-            return 0.405
+            return 0.4499
         if w == 'Battle-Scarred':
-            return 0.725
+            return 0.9999
         return None
 
     def _wear_for_max_float(self, max_float: Optional[float]) -> Optional[str]:
