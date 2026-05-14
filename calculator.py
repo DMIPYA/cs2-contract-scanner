@@ -329,21 +329,6 @@ class ContractCalculator:
                             if not pi:
                                 continue
                             price, skin_float, wear = pi
-                            worst_case = self._estimate_float_from_wear(wear)
-                            if worst_case is not None:
-                                skin_float = worst_case
-                            if price and float(price) > 0:
-                                merged.append({
-                                    'name': nm,
-                                    'collection': collection_name,
-                                    'price': float(price),
-                                    'float': float(skin_float) if skin_float is not None else 0.0,
-                                    'wear': str(wear or ''),
-                                    'rarity': rarity_norm,
-                                    'instance_key': f"{nm}|dbg",
-                                })
-                                added_any = True
-                                break
                     self._logger.info(
                         'HuntDebugInputs coll=%s rarity=%s ST=%s want_nm=%s present_before=%s candidates=%s added=%s',
                         str(collection_name),
@@ -513,10 +498,8 @@ class ContractCalculator:
         for price, lot_float, wear in lots:
             if len(expanded) >= int(limit):
                 break
-            worst_case_float = self._estimate_float_from_wear(wear)
-            if worst_case_float is None:
+            if lot_float is None:
                 continue
-            lot_float = worst_case_float
             if max_float is not None and float(lot_float) > float(max_float):
                 continue
 
@@ -646,9 +629,6 @@ class ContractCalculator:
             cap_f = float(cap) if cap is not None else None
         except Exception:
             cap_f = None
-        worst_case = self._estimate_float_from_wear(s.get('wear'))
-        if worst_case is not None:
-            cap_f = worst_case
         if cap_f is None:
             if not bool(allow_unknown_float):
                 result = {
@@ -691,19 +671,7 @@ class ContractCalculator:
 
         normalized_lots: List[Tuple[float, float, str]] = []
         for price, lot_float, wear in list(lots or []):
-            worst_case = self._estimate_float_from_wear(wear)
-            if worst_case is not None:
-                lf = worst_case
-            elif lot_float is not None:
-                lf = lot_float
-            else:
-                if not bool(allow_unknown_float):
-                    continue
-                lf = 1.0
-                try:
-                    lf2 = float(lf)
-                except Exception:
-                    continue
+            if lot_float is None:
                 normalized_lots.append((lf2, float(price), str(wear or '')))
 
             normalized_lots.sort(key=lambda x: (float(x[0]), float(x[1])))
@@ -1305,18 +1273,18 @@ class ContractCalculator:
                     wear_thr = {
                         'Factory New': 0.07,
                         'Minimal Wear': 0.15,
-                    'Field-Tested': 0.37,
-                    'Well-Worn': 0.45,
-                    'Battle-Scarred': 1.0,
-                }
-                try:
-                    prefer_in_norm_max = float(wear_thr.get(prefer_wear, 0.07))
-                except Exception:
-                    prefer_in_norm_max = 0.07
-                try:
-                    float_penalty_mult = float(os.getenv('HUNT_FLOAT_PENALTY_MULT', '1.5') or 1.5)
-                except Exception:
-                    float_penalty_mult = 1.5
+                        'Field-Tested': 0.37,
+                        'Well-Worn': 0.45,
+                        'Battle-Scarred': 1.0,
+                    }
+                    try:
+                        prefer_in_norm_max = float(wear_thr.get(prefer_wear, 0.07))
+                    except Exception:
+                        prefer_in_norm_max = 0.07
+                    try:
+                        float_penalty_mult = float(os.getenv('HUNT_FLOAT_PENALTY_MULT', '1.5') or 1.5)
+                    except Exception:
+                        float_penalty_mult = 1.5
 
                     def _stack_sort_key(x: Dict) -> float:
                         try:
@@ -4408,11 +4376,7 @@ class ContractCalculator:
                     allowed_wears.append("Field-Tested")
                 if wear not in allowed_wears:
                     continue
-            worst_case_float = self._estimate_float_from_wear(wear)
-            if worst_case_float is None:
-                continue
-            skin_float = worst_case_float
-            if max_float is not None and float(skin_float) > float(max_float):
+            if max_float is not None and skin_float is not None and float(skin_float) > float(max_float):
                 continue
             if price and price > 0:
                 priced_skins.append({
@@ -4500,13 +4464,9 @@ class ContractCalculator:
                         allowed_wears.append("Field-Tested")
                     if wear not in allowed_wears:
                         continue
-                worst_case_float = self._estimate_float_from_wear(wear)
-                if worst_case_float is None:
-                    continue
-                skin_float = worst_case_float
                 if max_price is not None and price is not None and float(price) > float(max_price):
                     continue
-                if max_float_threshold is not None and float(skin_float) > float(max_float_threshold):
+                if max_float_threshold is not None and skin_float is not None and float(skin_float) > float(max_float_threshold):
                     continue
 
                 outcomes_count = self._get_next_grade_skins_count(filler_collection, rarity, is_stattrak)
@@ -4578,13 +4538,9 @@ class ContractCalculator:
 
             if price_info:
                 price, skin_float, wear = price_info
-                worst_case_float = self._estimate_float_from_wear(wear)
-                if worst_case_float is None:
-                    continue
-                skin_float = worst_case_float
                 if max_price is not None and price is not None and price > max_price:
                     continue
-                if skin_float < target_float_threshold:
+                if skin_float is not None and skin_float < target_float_threshold:
                     outcomes_count = self._get_next_grade_skins_count(skin.collection, rarity, is_stattrak)
                     if outcomes_count <= 0:
                         continue
