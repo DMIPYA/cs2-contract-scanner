@@ -1288,7 +1288,7 @@ class ContractCalculator:
                     wear_thr = {
                         'Factory New': 0.07,
                         'Minimal Wear': 0.15,
-                        'Field-Tested': 0.37,
+        'Field-Tested': 0.38,
                         'Well-Worn': 0.45,
                         'Battle-Scarred': 1.0,
                     }
@@ -2140,10 +2140,10 @@ class ContractCalculator:
         wear_thresholds = {
             'Factory New': 0.07,
             'Minimal Wear': 0.15,
-    'Field-Tested': 0.37,
-    'Well-Worn': 0.45,
-    'Battle-Scarred': 1.0,
-}
+            'Field-Tested': 0.38,
+            'Well-Worn': 0.45,
+            'Battle-Scarred': 1.0,
+        }
 
         
         target_max_avg_norm = float(wear_thresholds.get(target_wear, 0.07))
@@ -2679,7 +2679,7 @@ class ContractCalculator:
             return 'Factory New'
         if mf <= 0.15 + 1e-12:
             return 'Minimal Wear'
-        if mf <= 0.37 + 1e-12:
+    if mf <= 0.38 + 1e-12:
             return 'Field-Tested'
         if mf <= 0.44 + 1e-12:
             return 'Well-Worn'
@@ -2913,7 +2913,7 @@ class ContractCalculator:
         quality_thresholds = {
             "Factory New": 0.07,
             "Minimal Wear": 0.15,
-            "Field-Tested": 0.37,
+    "Field-Tested": 0.38,
             "Well-Worn": 0.44,
             "Battle-Scarred": 1.0
         }
@@ -2938,7 +2938,7 @@ class ContractCalculator:
             return "FN Leap"
         elif avg_float <= 0.15:
             return "MW Leap"  
-        elif avg_float <= 0.37:
+    elif avg_float <= 0.38:
             return "FT Standard"
         elif avg_float <= 0.44:
             return "WW Standard"
@@ -3710,7 +3710,7 @@ class ContractCalculator:
                         core_count,
                         is_stattrak,
                         rarity=input_rarity,
-                        max_float=0.37,
+            max_float=0.38,
                     )
                 if len(core_skins) < core_count:
                     skipped_no_core += 1
@@ -3843,8 +3843,8 @@ class ContractCalculator:
                 used_collections = []
                 used_outcomes = []
 
-                # Сначала пробуем строгий cap под MW (0.15). Если не получается — пробуем FT (0.37).
-                for target_avg in [0.15, 0.37]:
+# Сначала пробуем строгий cap под MW (0.15). Если не получается — пробуем FT (0.38).
+for target_avg in [0.15, 0.38]:
                     max_filler_float = ((target_avg * 10.0) - core_float_sum) / max(1, filler_count)
                     if max_filler_float <= 0.0:
                         continue
@@ -3993,7 +3993,7 @@ class ContractCalculator:
                     if avg_norm_float <= (0.15 + 1e-9):
                         expected_wear = 'Minimal Wear'
                         break
-                    if avg_norm_float <= (0.37 + 1e-9):
+        if avg_norm_float <= (0.38 + 1e-9):
                         expected_wear = 'Field-Tested'
                         break
                     # avg_norm_float > 0.15 even with this threshold — try next
@@ -4387,7 +4387,7 @@ class ContractCalculator:
             price, skin_float, wear = price_info
             if skin_float is None and max_float is not None and float(max_float) < 0.999:
                 allowed_wears = ["Factory New", "Minimal Wear"]
-                if float(max_float) >= 0.37:
+        if float(max_float) >= 0.38:
                     allowed_wears.append("Field-Tested")
                 if wear not in allowed_wears:
                     continue
@@ -4475,7 +4475,7 @@ class ContractCalculator:
                 price, skin_float, wear = price_info
                 if skin_float is None and max_float_threshold is not None and float(max_float_threshold) < 0.999:
                     allowed_wears = ["Factory New", "Minimal Wear"]
-                    if float(max_float_threshold) >= 0.37:
+        if float(max_float_threshold) >= 0.38:
                         allowed_wears.append("Field-Tested")
                     if wear not in allowed_wears:
                         continue
@@ -4775,7 +4775,7 @@ class ContractCalculator:
         wear_thresholds = {
             'Factory New': 0.07,
             'Minimal Wear': 0.15,
-        'Field-Tested': 0.37,
+        'Field-Tested': 0.38,
         'Well-Worn': 0.45,
         'Battle-Scarred': 1.0
     }
@@ -4853,7 +4853,9 @@ class ContractCalculator:
                     min_f, max_f = 0.0, 1.0
 
                 try:
-                    wears_avail = list(getattr(skin_data, 'wears', None) or []) if skin_data else []
+                    raw_wears = list(getattr(skin_data, 'wears', None) or []) if skin_data else []
+                    # Normalize wear entries: they may be strings or dicts with a 'name' field.
+                    wears_avail = [w.get('name') if isinstance(w, dict) and 'name' in w else str(w) for w in raw_wears]
                 except Exception:
                     wears_avail = []
 
