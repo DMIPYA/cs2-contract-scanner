@@ -2679,7 +2679,7 @@ class ContractCalculator:
             return 'Factory New'
         if mf <= 0.15 + 1e-12:
             return 'Minimal Wear'
-    if mf <= 0.38 + 1e-12:
+        if mf <= 0.38 + 1e-12:
             return 'Field-Tested'
         if mf <= 0.44 + 1e-12:
             return 'Well-Worn'
@@ -2938,7 +2938,7 @@ class ContractCalculator:
             return "FN Leap"
         elif avg_float <= 0.15:
             return "MW Leap"  
-    elif avg_float <= 0.38:
+        elif avg_float <= 0.38:
             return "FT Standard"
         elif avg_float <= 0.44:
             return "WW Standard"
@@ -3843,8 +3843,8 @@ class ContractCalculator:
                 used_collections = []
                 used_outcomes = []
 
-# Сначала пробуем строгий cap под MW (0.15). Если не получается — пробуем FT (0.38).
-for target_avg in [0.15, 0.38]:
+                # Сначала пробуем строгий cap под MW (0.15). Если не получается — пробуем FT (0.38).
+                for target_avg in [0.15, 0.38]:
                     max_filler_float = ((target_avg * 10.0) - core_float_sum) / max(1, filler_count)
                     if max_filler_float <= 0.0:
                         continue
@@ -3993,7 +3993,7 @@ for target_avg in [0.15, 0.38]:
                     if avg_norm_float <= (0.15 + 1e-9):
                         expected_wear = 'Minimal Wear'
                         break
-        if avg_norm_float <= (0.38 + 1e-9):
+                    if avg_norm_float <= (0.38 + 1e-9):
                         expected_wear = 'Field-Tested'
                         break
                     # avg_norm_float > 0.15 even with this threshold — try next
@@ -4387,7 +4387,7 @@ for target_avg in [0.15, 0.38]:
             price, skin_float, wear = price_info
             if skin_float is None and max_float is not None and float(max_float) < 0.999:
                 allowed_wears = ["Factory New", "Minimal Wear"]
-        if float(max_float) >= 0.38:
+                if float(max_float) >= 0.38:
                     allowed_wears.append("Field-Tested")
                 if wear not in allowed_wears:
                     continue
@@ -4475,7 +4475,7 @@ for target_avg in [0.15, 0.38]:
                 price, skin_float, wear = price_info
                 if skin_float is None and max_float_threshold is not None and float(max_float_threshold) < 0.999:
                     allowed_wears = ["Factory New", "Minimal Wear"]
-        if float(max_float_threshold) >= 0.38:
+                    if float(max_float_threshold) >= 0.38:
                         allowed_wears.append("Field-Tested")
                     if wear not in allowed_wears:
                         continue
