@@ -80,12 +80,17 @@ class ContractCalculator:
             "Covert": 5
         }
         
-        # Float значения для получения Factory New
+        # Float пороги для определения wear (CS2 стандарт)
+        # Factory New: 0.00 - 0.07
+        # Minimal Wear: 0.07 - 0.15
+        # Field-Tested: 0.15 - 0.38
+        # Well-Worn: 0.38 - 0.45
+        # Battle-Scarred: 0.45 - 1.00
         self.float_thresholds = {
             "Factory New": 0.07,
             "Minimal Wear": 0.15,
-            "Field-Tested": 0.37,
-            "Well-Worn": 0.44,
+            "Field-Tested": 0.38,
+            "Well-Worn": 0.45,
             "Battle-Scarred": 1.0
         }
         
@@ -128,15 +133,24 @@ class ContractCalculator:
         return self._last_target_suite_diagnostics
 
     def _wear_to_max_float(self, wear: str) -> float:
+        """Возвращает максимальное значение float для данного wear.
+        
+        CS2 wear ranges:
+        - Factory New: 0.00 - 0.07
+        - Minimal Wear: 0.07 - 0.15
+        - Field-Tested: 0.15 - 0.38
+        - Well-Worn: 0.38 - 0.45
+        - Battle-Scarred: 0.45 - 1.00
+        """
         w = str(wear or '')
         if w == 'Factory New':
             return 0.07
         if w == 'Minimal Wear':
             return 0.15
         if w == 'Field-Tested':
-            return 0.37
+            return 0.38
         if w == 'Well-Worn':
-            return 0.44
+            return 0.45
         return 1.0
 
     def _avg_outcome_price_for_collection(
@@ -4748,18 +4762,27 @@ class ContractCalculator:
         return 'Battle-Scarred'
 
     def _determine_wear_from_float(self, item_float: float) -> str:
-        wear_thresholds = [
-            ('Factory New', 0.07),
-            ('Minimal Wear', 0.15),
-            ('Field-Tested', 0.37),
-            ('Well-Worn', 0.45),
-            ('Battle-Scarred', 1.0),
-        ]
-
-        for wear_name, threshold in wear_thresholds:
-            if item_float <= threshold:
-                return wear_name
-        return 'Battle-Scarred'
+        """Определяет качество (wear) по значению float.
+        
+        CS2 wear ranges:
+        - Factory New: 0.00 - 0.07
+        - Minimal Wear: 0.07 - 0.15
+        - Field-Tested: 0.15 - 0.38
+        - Well-Worn: 0.38 - 0.45
+        - Battle-Scarred: 0.45 - 1.00
+        """
+        f = float(item_float)
+        
+        if f < 0.07:
+            return 'Factory New'
+        elif f < 0.15:
+            return 'Minimal Wear'
+        elif f < 0.38:
+            return 'Field-Tested'
+        elif f < 0.45:
+            return 'Well-Worn'
+        else:
+            return 'Battle-Scarred'
 
     def calculate_contract_outcomes_details(self, contract_skins: List[Dict], is_stattrak: bool) -> List[Dict]:
         avg_norm = self._calculate_average_normalized_float(contract_skins)
