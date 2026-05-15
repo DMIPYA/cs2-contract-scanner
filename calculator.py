@@ -669,10 +669,11 @@ class ContractCalculator:
             except Exception:
                 lots = []
 
-        normalized_lots: List[Tuple[float, float, str]] = []
-        for price, lot_float, wear in list(lots or []):
-            if lot_float is None:
-                normalized_lots.append((lf2, float(price), str(wear or '')))
+            normalized_lots: List[Tuple[float, float, str]] = []
+            for price, lot_float, wear in list(lots or []):
+                if lot_float is None:
+                    continue
+                normalized_lots.append((float(lot_float), float(price), str(wear or '')))
 
             normalized_lots.sort(key=lambda x: (float(x[0]), float(x[1])))
             depth = len(normalized_lots)
