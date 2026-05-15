@@ -4693,6 +4693,15 @@ class ContractCalculator:
         return total / valid if valid > 0 else 0.0
 
     def _calculate_weighted_average_normalized_float(self, contract_skins: List[Dict], is_stattrak: bool) -> float:
+        """
+        Рассчитывает weighted average normalized float согласно алгоритму skinsearch.
+        
+        Для каждого входного скина:
+        1. Находим все возможные выходные скины из его коллекции
+        2. Определяем min/max float среди этих выходных скинов
+        3. Нормализуем float входного скина относительно этого диапазона
+        4. Взвешиваем по количеству возможных исходов из этой коллекции
+        """
         if not contract_skins:
             return 0.0
 
@@ -4708,34 +4717,51 @@ class ContractCalculator:
             if skin_float is None:
                 continue
 
-            skin_name = skin.get('name', '')
-            skin_data = self.database.get_skin_by_name(skin_name)
-            if not skin_data:
+            collection = skin.get('collection', '')
+            if not collection:
                 continue
 
-            try:
-                min_f = float(skin_data.min_float)
-                max_f = float(skin_data.max_float)
-            except Exception:
-                continue
-
-            denom = max_f - min_f
-            if denom <= 1e-9:
-                continue
-
-            norm = (float(skin_float) - min_f) / denom
-            if norm < 0.0:
-                norm = 0.0
-            if norm > 1.0:
-                norm = 1.0
-
+            # Получаем количество возможных исходов из этой коллекции
             outcomes_count = self._get_next_grade_skins_count(
-                skin.get('collection', ''),
+                collection,
                 input_rarity,
                 is_stattrak=is_stattrak,
             )
             if outcomes_count <= 0:
                 continue
+
+            # Находим min/max float среди всех возможных выходных скинов из этой коллекции
+            output_skins = self._get_possible_outputs(collection, input_rarity, target_wear='Factory New', is_stattrak=is_stattrak)
+            if not output_skins:
+                continue
+
+            # Определяем диапазон float для выходных скинов
+            # Получаем реальные min/max float из базы данных для каждого выходного скина
+            output_float_ranges = []
+            for out in output_skins:
+                skin_data = self.database.get_skin_by_name(out['name'])
+                if skin_data:
+                    try:
+                        output_float_ranges.append((float(skin_data.min_float), float(skin_data.max_float)))
+                    except Exception:
+                        pass
+            
+            if not output_float_ranges:
+                continue
+            
+            min_output_float = min(r[0] for r in output_float_ranges)
+            max_output_float = max(r[1] for r in output_float_ranges)
+            
+            denom = max_output_float - min_output_float
+            if denom <= 1e-9:
+                continue
+
+            # Нормализуем float входного скина относительно диапазона выходных скинов
+            norm = (float(skin_float) - min_output_float) / denom
+            if norm < 0.0:
+                norm = 0.0
+            if norm > 1.0:
+                norm = 1.0
 
             weighted_sum += norm * float(outcomes_count)
             total_weight += float(outcomes_count)
