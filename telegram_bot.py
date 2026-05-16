@@ -581,7 +581,13 @@ def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, cont
 
         max_allowed_idx = max(allowed_idxs)
         max_allowed_wear = _WEAR_ORDER[max_allowed_idx]
-        max_out_float_ok = float(_WEAR_THRESHOLDS.get(max_allowed_wear, 1.0))
+        
+        # For Battle-Scarred, use the skin's max_float instead of 1.0
+        # For other wears, use threshold minus epsilon to ensure we stay below the boundary
+        if max_allowed_wear == 'Battle-Scarred':
+            max_out_float_ok = float(max_f)
+        else:
+            max_out_float_ok = float(_WEAR_THRESHOLDS.get(max_allowed_wear, 1.0)) - 0.0001
 
         thr_i = (max_out_float_ok - float(min_f)) / float(denom)
         if thr_i < 0.0:
