@@ -4772,24 +4772,24 @@ class ContractCalculator:
     
     def _determine_best_achievable_wear(self, average_float: float) -> str:
         """Определение лучшего достижимого качества"""
-        wear_thresholds = {
-            'Factory New': 0.07,
-            'Minimal Wear': 0.15,
-        'Field-Tested': 0.38,
-        'Well-Worn': 0.45,
-        'Battle-Scarred': 1.0
-    }
-
+        # Align with external calculators: wear is determined by the normalized average float (f')
+        # Use the same thresholds as _determine_wear_from_float for consistency
+        f = float(average_float)
         
-        for wear_name, threshold in wear_thresholds.items():
-            if average_float <= threshold:
-                return wear_name
-        
-        return 'Battle-Scarred'
+        if f < 0.07:
+            return 'Factory New'
+        elif f < 0.15:
+            return 'Minimal Wear'
+        elif f < 0.38:
+            return 'Field-Tested'
+        elif f < 0.45:
+            return 'Well-Worn'
+        else:
+            return 'Battle-Scarred'
 
     def _determine_wear_from_float(self, item_float: float) -> str:
         """Определяет качество (wear) по значению float.
-        
+
         CS2 wear ranges:
         - Factory New: 0.00 - 0.07
         - Minimal Wear: 0.07 - 0.15
@@ -4798,7 +4798,7 @@ class ContractCalculator:
         - Battle-Scarred: 0.45 - 1.00
         """
         f = float(item_float)
-        
+
         if f < 0.07:
             return 'Factory New'
         elif f < 0.15:
