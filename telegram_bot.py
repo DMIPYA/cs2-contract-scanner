@@ -537,8 +537,8 @@ def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, cont
     thr_global = 1.0
     for o in outs:
         nm = str(o.get('name') or '')
-        o_target_wear = str(o.get('wear') or '').strip() or str(fallback_target_wear or '').strip()
-        t_idx = _wear_idx(o_target_wear)
+        # Use the contract's overall expected wear as the threshold for all outcomes
+        t_idx = _wear_idx(str(fallback_target_wear or '').strip())
         skin_data = None
         try:
             skin_data = svc.calculator.database.get_skin_by_name(nm)
@@ -562,23 +562,20 @@ def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, cont
             wears_avail = list(getattr(skin_data, 'wears', None) or [])
         except Exception:
             wears_avail = []
-
-        # Determine which computed wear buckets are acceptable given target_wear AND availability degradation.
-        # Condition: computed_wear_idx <= max_allowed_idx, where max_allowed_idx is the worst available wear
-        # still not worse than target.
-        allowed_idxs = []
-        if wears_avail:
-            for w in wears_avail:
-                wi = _wear_idx(w)
-                if wi <= t_idx:
-                    allowed_idxs.append(wi)
-        else:
-            # If no info about available wears, assume all wears are possible.
-            allowed_idxs = list(range(0, t_idx + 1))
-
+        
+        # Determine which computed wear buckets are acceptable given target_wear.
+        # Previously we limited to the worst wear listed in the skin data, which caused
+        # valid outcomes to be downgraded when the database lacked explicit entries
+        # for the worst wear (e.g., Battle-Scarred). To ensure correct thresholds we
+        # now treat the target wear as the maximum allowed index, regardless of
+        # missing entries in `wears_avail`. This aligns the bot's calculations with
+        # external calculators that assume all wear levels are possible unless the
+        # skin explicitly cannot reach them.
+        allowed_idxs = list(range(0, t_idx + 1))
+        
         if not allowed_idxs:
             return (None, False)
-
+        
         max_allowed_idx = max(allowed_idxs)
         max_allowed_wear = _WEAR_ORDER[max_allowed_idx]
         
