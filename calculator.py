@@ -4812,6 +4812,8 @@ class ContractCalculator:
             return 'Battle-Scarred'
 
     def calculate_contract_outcomes_details(self, contract_skins: List[Dict], is_stattrak: bool) -> List[Dict]:
+        # Используем нормализованный средний float (0-1)
+        # Это правильно для скинов с ограниченными диапазонами
         avg_norm = self._calculate_average_normalized_float(contract_skins)
         if avg_norm < 0.0:
             avg_norm = 0.0
@@ -4867,7 +4869,16 @@ class ContractCalculator:
                 if max_f <= min_f + 1e-9:
                     min_f, max_f = 0.0, 1.0
 
+                # Денормализуем средний нормализованный float в диапазон выходного скина
+                # avg_norm находится в диапазоне 0-1, нужно преобразовать в диапазон [min_f, max_f]
                 out_float = float(avg_norm) * (max_f - min_f) + min_f
+                
+                # Дополнительная проверка границ (на случай ошибок округления)
+                if out_float < min_f:
+                    out_float = min_f
+                if out_float > max_f:
+                    out_float = max_f
+                
                 wear = self._determine_wear_from_float(out_float)
 
                 # Ensure the computed wear exists for this skin. If not, degrade to the nearest worse available wear.
