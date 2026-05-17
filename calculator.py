@@ -2674,14 +2674,15 @@ class ContractCalculator:
             mf = float(max_float)
         except Exception:
             return None
-        # Выбираем "лучшее" качество, которое гарантированно <= max_float
-        if mf <= 0.07 + 1e-12:
+        # Выбираем "лучшее" качество, которое гарантированно < max_float
+        # Используем < вместо <=, так как границы wear эксклюзивные
+        if mf < 0.07:
             return 'Factory New'
-        if mf <= 0.15 + 1e-12:
+        if mf < 0.15:
             return 'Minimal Wear'
-        if mf <= 0.38 + 1e-12:
+        if mf < 0.38:
             return 'Field-Tested'
-        if mf <= 0.44 + 1e-12:
+        if mf < 0.45:
             return 'Well-Worn'
         return None
 
@@ -2927,20 +2928,20 @@ class ContractCalculator:
         return {
             "avg_input_float": avg_input_float,
             "result_quality": result_quality,
-            "can_be_fn": avg_input_float <= 0.07,
-            "can_be_mw": avg_input_float <= 0.15,
+            "can_be_fn": avg_input_float < 0.07,
+            "can_be_mw": avg_input_float < 0.15,
             "quality_leap": self._calculate_quality_leap(input_floats, avg_input_float)
         }
     
     def _calculate_quality_leap(self, input_floats: List[float], avg_float: float) -> str:
         """Рассчитывает тип перехода качества"""
-        if avg_float <= 0.07:
+        if avg_float < 0.07:
             return "FN Leap"
-        elif avg_float <= 0.15:
+        elif avg_float < 0.15:
             return "MW Leap"  
-        elif avg_float <= 0.38:
+        elif avg_float < 0.38:
             return "FT Standard"
-        elif avg_float <= 0.44:
+        elif avg_float < 0.45:
             return "WW Standard"
         else:
             return "BS Standard"
@@ -4012,7 +4013,7 @@ class ContractCalculator:
                     })
                     continue
 
-                # contract_skins assembled with avg_norm_float <= 0.15
+                # contract_skins assembled with avg_norm_float < 0.15
                 actual_p = self._calculate_output_probability(
                     contract_skins,
                     target_c,
