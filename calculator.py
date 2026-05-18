@@ -3429,21 +3429,11 @@ class ContractCalculator:
                     continue
                 filler_price_cap = float(min_main_price) * float(self._filler_to_target_price_ratio)
 
-                main_floats = [s.get('float') for s in main_skins if s.get('float') is not None]
-                sum_main_float = sum(main_floats) if main_floats else None
-
+                # Use normalized float (avg_norm) for wear constraints.
                 float_targets = [0.07, 0.15]
                 fillers: List[Dict] = []
                 for target_avg in float_targets:
-                    max_allowed_float = 1.0
-                    if sum_main_float is None:
-                        required_filler_threshold = min(target_avg, max_allowed_float)
-                    else:
-                        required_filler_threshold = ((target_avg * 10) - sum_main_float) / max(1, filler_count)
-                        if required_filler_threshold <= 0:
-                            continue
-                        if required_filler_threshold > max_allowed_float:
-                            required_filler_threshold = max_allowed_float
+                    required_filler_threshold = min(target_avg, 1.0)
 
                     fillers = self._get_smart_fillers(
                         input_rarity,
@@ -3455,8 +3445,8 @@ class ContractCalculator:
                     )
                     if len(fillers) >= filler_count:
                         candidate_contract = main_skins + fillers[:filler_count]
-                        candidate_avg_float = self._calculate_average_float(candidate_contract)
-                        if candidate_avg_float <= (target_avg + 1e-9):
+                        candidate_avg_norm = self._calculate_average_normalized_float(candidate_contract)
+                        if candidate_avg_norm <= (target_avg + 1e-9):
                             break
                         fillers = []
 
@@ -3490,7 +3480,7 @@ class ContractCalculator:
                 if not ok:
                     continue
 
-                if self._calculate_average_float(contract_skins) > 0.15:
+                if self._calculate_average_normalized_float(contract_skins) > 0.15:
                     continue
                 contract_data = self._calculate_contract_profit(
                     contract_skins, target_collection, is_stattrak
@@ -3832,9 +3822,7 @@ class ContractCalculator:
 
                 # Важно: филлеры должны быть из ОДНОЙ коллекции, иначе размывается шанс (tickets).
                 # Поэтому перебираем кандидатов-коллекций и берем филлеры только из одной.
-                # Вычисляем максимально допустимый float для филлеров,
-                # чтобы average_float контракта <= target_avg.
-                core_float_sum = sum(float(s.get('float') or 0.15) for s in core_skins[:core_count])
+                # Use normalized-float thresholds for candidate screening.
 
                 made = False
                 contract_skins = None
@@ -3844,12 +3832,9 @@ class ContractCalculator:
                 used_collections = []
                 used_outcomes = []
 
-                # Сначала пробуем строгий cap под MW (0.15). Если не получается — пробуем FT (0.38).
+                # First try MW threshold (0.15), then FT threshold (0.38) in avg_norm space.
                 for target_avg in [0.15, 0.38]:
-                    max_filler_float = ((target_avg * 10.0) - core_float_sum) / max(1, filler_count)
-                    if max_filler_float <= 0.0:
-                        continue
-                    max_filler_float = max(0.01, max_filler_float)
+                    max_filler_float = min(target_avg, 1.0)
 
                     picked_fillers = []
                     used_collections = []
@@ -3904,8 +3889,8 @@ class ContractCalculator:
                         cand = cheap_pool_sorted[: int(filler_count)]
 
                         candidate_contract = core_skins[:core_count] + cand
-                        candidate_avg_float = self._calculate_average_float(candidate_contract)
-                        if candidate_avg_float > (target_avg + 1e-9):
+                        candidate_avg_norm = self._calculate_average_normalized_float(candidate_contract)
+                        if candidate_avg_norm > (target_avg + 1e-9):
                             continue
                         total_price = sum(float(s.get('price') or 0.0) for s in cand)
                         # Немного штрафуем более высокий cap, чтобы при равной цене
@@ -4013,7 +3998,8 @@ class ContractCalculator:
                     })
                     continue
 
-                # contract_skins assembled with avg_norm_float < 0.15
+                    # contract_skins assembled with avg_norm_float within target threshold
+
                 actual_p = self._calculate_output_probability(
                     contract_skins,
                     target_c,
@@ -4202,19 +4188,10 @@ class ContractCalculator:
                     # Филлеры всё равно сортируются по цене и выбираются самыми дешёвыми.
                     filler_price_cap = None
 
-                    main_floats = [s.get('float') for s in main_skins if s.get('float') is not None]
-                    sum_main_float = sum(main_floats) if main_floats else None
-
                     float_targets = [0.15]
                     fillers: List[Dict] = []
                     for target_avg in float_targets:
-                        if sum_main_float is None:
-                            required_filler_threshold = target_avg
-                        else:
-                            required_filler_threshold = ((target_avg * 10) - sum_main_float) / max(1, filler_count)
-                            if required_filler_threshold <= 0:
-                                continue
-                        required_filler_threshold = min(required_filler_threshold, 1.0)
+                        required_filler_threshold = min(target_avg, 1.0)
 
                         # Филлеры строго из одной коллекции, иначе размывается шанс.
                         filler_candidates: List[Tuple[int, float, str]] = []
@@ -4262,8 +4239,8 @@ class ContractCalculator:
                             cheap_pool_sorted = sorted(cheap_pool, key=lambda x: (x.get('float', 1.0), x.get('price', 1e9)))
                             cand = cheap_pool_sorted[: int(filler_count)]
                             candidate_contract = main_skins + cand
-                            candidate_avg_float = self._calculate_average_float(candidate_contract)
-                            if candidate_avg_float > (target_avg + 1e-9):
+                            candidate_avg_norm = self._calculate_average_normalized_float(candidate_contract)
+                            if candidate_avg_norm > (target_avg + 1e-9):
                                 continue
                             total_price = sum(float(s.get('price') or 0.0) for s in cand)
                             if best_total_price is None or total_price < best_total_price:
@@ -4291,7 +4268,7 @@ class ContractCalculator:
                         continue
 
                     contract_skins = main_skins + fillers[:filler_count]
-                    if self._calculate_average_float(contract_skins) > 0.15:
+                    if self._calculate_average_normalized_float(contract_skins) > 0.15:
                         diag_float_fail += 1
                         continue
 
