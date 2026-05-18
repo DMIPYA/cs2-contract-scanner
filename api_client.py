@@ -679,9 +679,27 @@ class MarketCSGOClient:
         prev_files = prev_idx.get('files') if isinstance(prev_idx, dict) else {}
         prev_files = prev_files if isinstance(prev_files, dict) else {}
 
+        try:
+            force_reload_seconds = int(os.getenv('FULL_EXPORT_FORCE_RELOAD_SECONDS', '1800') or 1800)
+        except Exception:
+            force_reload_seconds = 1800
+        force_reload_seconds = max(60, int(force_reload_seconds))
+
+        prev_updated_ts = 0.0
+        try:
+            prev_updated_ts = float(prev_idx.get('updated_ts') or 0.0)
+        except Exception:
+            prev_updated_ts = 0.0
+        is_stale = (time.time() - prev_updated_ts) >= float(force_reload_seconds) if prev_updated_ts > 0 else True
+
         changed_files = [f for f in files_to_load if str(prev_files.get(f) or '') != str(f)]
+        if not changed_files and is_stale:
+            # Manifest names can remain stable while content changes; force periodic full resync.
+            changed_files = list(files_to_load)
+
         if not changed_files and base_cache:
             total_lots = sum(len(v) for v in base_cache.values())
+            logger.info('full-export incremental: no changed files and cache is fresh')
             return (dict(base_cache), int(total_lots))
 
         start_cache = dict(base_cache or {})
@@ -724,6 +742,8 @@ class MarketCSGOClient:
         idx_obj = {
             'files': {f: f for f in files_to_load},
             'updated_ts': time.time(),
+            'reloaded_files': int(len(changed_files)),
+            'total_manifest_files': int(len(files_to_load)),
         }
         self._save_full_export_index_cache(idx_obj)
 

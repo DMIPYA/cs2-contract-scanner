@@ -519,6 +519,27 @@ class TargetHuntingService:
                 updated = list(updated_no) + list(updated_st)
             logger.info('Found %d contracts (Normal: %d, StatTrak: %d)', len(updated), len(updated_no), len(updated_st))
 
+            # Strict accuracy gate: require full float data (10/10) for contract inputs.
+            strict_input_float = str(os.getenv('STRICT_INPUT_FLOAT', '1') or '1').strip().lower() not in {'0', 'false', 'no', 'off'}
+            if strict_input_float and updated:
+                before_cnt = len(updated)
+                strict_filtered = []
+                dropped_no_float = 0
+                dropped_bad_count = 0
+                for r in updated:
+                    ins = list((r or {}).get('input_skins') or [])
+                    if len(ins) != 10:
+                        dropped_bad_count += 1
+                        continue
+                    if any((s or {}).get('float') is None for s in ins):
+                        dropped_no_float += 1
+                        continue
+                    strict_filtered.append(r)
+                updated = strict_filtered
+                updated_no = [r for r in updated if not r.get('is_stattrak')]
+                updated_st = [r for r in updated if r.get('is_stattrak')]
+                logger.info('Strict float gate: before=%d after=%d dropped_no_float=%d dropped_bad_count=%d', before_cnt, len(updated), dropped_no_float, dropped_bad_count)
+
             if updated:
                 def _sort_key(r: Dict) -> float:
                     return float(
@@ -553,10 +574,15 @@ class TargetHuntingService:
                 except Exception:
                     ins = []
                     is_st = False
-                if not ins:
-                    r['outcomes'] = []
-                    r['profit_probability'] = 0.0
-                    return
+                    if not ins:
+                        r['outcomes'] = []
+                        r['profit_probability'] = 0.0
+                        return
+                    if any((s or {}).get('float') is None for s in ins):
+                        r['outcomes'] = []
+                        r['profit_probability'] = 0.0
+                        return
+
                 outs = calc.calculate_contract_outcomes_details(ins, is_stattrak=is_st)
                 try:
                     outs = list(outs or [])
