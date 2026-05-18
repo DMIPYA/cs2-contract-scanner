@@ -6,6 +6,7 @@ import pickle
 import random
 import threading
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple, Any
 from dotenv import load_dotenv
 import logging
@@ -39,6 +40,13 @@ class MarketCSGOClient:
         self.base_url = 'https://market.csgo.com/api/full-export'
         self.cache_ttl = int(os.getenv('CACHE_TTL', 300))  # 5 минут по умолчанию
         self.files_to_load = int(os.getenv('FULL_EXPORT_FILES_TO_LOAD', '0'))
+        self.price_source_mode = str(os.getenv('PRICE_SOURCE_MODE', 'v1_first') or 'v1_first').strip().lower()
+        self.strict_input_float = str(os.getenv('STRICT_INPUT_FLOAT', '1') or '1').strip().lower() not in {'0', 'false', 'no', 'off'}
+        self.full_export_index_cache_path = os.getenv('FULL_EXPORT_INDEX_CACHE', 'full_export_index_cache.json')
+        try:
+            self.full_export_workers = max(1, int(os.getenv('FULL_EXPORT_WORKERS', '8') or 8))
+        except Exception:
+            self.full_export_workers = 8
 
         self.sales_history_ttl_seconds = int(os.getenv('MARKET_SALES_HISTORY_TTL', '3600'))  # 1 час по умолчанию
 
@@ -390,6 +398,35 @@ class MarketCSGOClient:
         with self._prefix_match_cache_lock:
             self._prefix_match_cache = {}
 
+    def _load_full_export_index_cache(self) -> Dict[str, Any]:
+        path = str(self.full_export_index_cache_path or '').strip()
+        if not path:
+            return {}
+        try:
+            if not os.path.isabs(path):
+                path = os.path.join(os.path.dirname(__file__), path)
+            if not os.path.exists(path):
+                return {}
+            with open(path, 'r', encoding='utf-8') as f:
+                obj = json.load(f)
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+
+    def _save_full_export_index_cache(self, data: Dict[str, Any]) -> None:
+        path = str(self.full_export_index_cache_path or '').strip()
+        if not path:
+            return
+        try:
+            if not os.path.isabs(path):
+                path = os.path.join(os.path.dirname(__file__), path)
+            tmp_path = f"{path}.tmp"
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(data or {}, f, ensure_ascii=True)
+            os.replace(tmp_path, path)
+        except Exception:
+            logger.debug('Failed to save full-export index cache', exc_info=True)
+
     def _get_prefix_matches(self, variant: str, cache_snapshot: Dict[str, List[Tuple[float, Optional[float], str, bool]]]) -> List[str]:
         v = str(variant or '')
         if not v:
@@ -617,6 +654,83 @@ class MarketCSGOClient:
 
         return list(set(cleaned))  # Удаляем дубликаты
     
+    def _fetch_full_export_manifest(self) -> List[str]:
+        data = self._request_json(
+            f"{self.base_url}/USD.json",
+            timeout=30,
+            params=self._api_key_params,
+            retries=3,
+        )
+        if not isinstance(data, dict):
+            return []
+        items = data.get('items')
+        if not isinstance(items, list):
+            return []
+        if self.files_to_load and self.files_to_load > 0:
+            return [str(x) for x in items[: self.files_to_load] if x]
+        return [str(x) for x in items if x]
+
+    def _load_prices_full_export_incremental(self, *, base_cache: Optional[Dict[str, List[Tuple[float, Optional[float], str, bool]]]] = None) -> Optional[Tuple[Dict[str, List[Tuple[float, Optional[float], str, bool]]], int]]:
+        files_to_load = self._fetch_full_export_manifest()
+        if not files_to_load:
+            return None
+
+        prev_idx = self._load_full_export_index_cache()
+        prev_files = prev_idx.get('files') if isinstance(prev_idx, dict) else {}
+        prev_files = prev_files if isinstance(prev_files, dict) else {}
+
+        changed_files = [f for f in files_to_load if str(prev_files.get(f) or '') != str(f)]
+        if not changed_files and base_cache:
+            total_lots = sum(len(v) for v in base_cache.values())
+            return (dict(base_cache), int(total_lots))
+
+        start_cache = dict(base_cache or {})
+
+        def _load_one(file_name: str) -> Tuple[str, Dict[str, List[Tuple[float, Optional[float], str, bool]]], int]:
+            file_data = self._request_json(
+                f"{self.base_url}/{file_name}",
+                timeout=int(self.full_export_file_timeout),
+                params=self._api_key_params,
+                close_connection=True,
+                retries=max(1, int(self.full_export_file_retries) + 1),
+                backoff_base_seconds=0.25,
+            )
+            file_cache: Dict[str, List[Tuple[float, Optional[float], str, bool]]] = {}
+            if file_data is None:
+                return (file_name, file_cache, 0)
+            lots = self._parse_file_data(file_data, cache_override=file_cache)
+            return (file_name, file_cache, int(lots))
+
+        workers = max(1, int(self.full_export_workers))
+        total_lots_processed = 0
+        loaded = 0
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = [ex.submit(_load_one, fn) for fn in changed_files]
+            for fut in as_completed(futs):
+                try:
+                    file_name, file_cache, lots = fut.result()
+                except Exception:
+                    continue
+                if not file_cache:
+                    continue
+                loaded += 1
+                total_lots_processed += int(lots)
+                for nm, lots_list in file_cache.items():
+                    start_cache[nm] = list(lots_list)
+
+        if not start_cache:
+            return None
+
+        idx_obj = {
+            'files': {f: f for f in files_to_load},
+            'updated_ts': time.time(),
+        }
+        self._save_full_export_index_cache(idx_obj)
+
+        total_lots = sum(len(v) for v in start_cache.values())
+        logger.info('full-export incremental: files=%d changed=%d loaded=%d lots_new=%d cache_keys=%d', len(files_to_load), len(changed_files), loaded, total_lots_processed, len(start_cache))
+        return (start_cache, int(total_lots))
+
     def load_prices(self, force_refresh: bool = False) -> bool:
         """Загрузка цен из Full Export API с двухэтапной загрузкой"""
         if not force_refresh and self._is_cache_valid():
@@ -634,107 +748,56 @@ class MarketCSGOClient:
                 logger.info("Кэш цен успешно загружен с диска")
                 return True
 
-        # Сначала пробуем быстрый v2 прайс-лист (1 запрос вместо множества файлов)
-        v2_cache = self._load_prices_v2()
-        if v2_cache:
-            with self._prices_cache_lock:
-                self._prices_cache = v2_cache
-                self._last_update_time = time.time()
-                self._total_lots_analyzed = sum(len(v) for v in v2_cache.values())
-            self._reset_prefix_cache()
-            self._save_disk_cache(v2_cache)
-            logger.info("Кэш цен успешно обновлен (v2)")
-            return True
-        
         try:
-            logger.info("Загрузка цен из API...")
-            
-            # Этап 1: Получение списка файлов
-            data = self._request_json(
-                f"{self.base_url}/USD.json",
-                timeout=30,
-                params=self._api_key_params,
-                retries=3,
-            )
-            if not isinstance(data, dict):
-                raise RuntimeError('Invalid JSON response (expected dict)')
-            
-            if 'items' not in data or not data['items']:
-                logger.error("Неверный формат ответа API - отсутствуют items")
-                # Если уже есть рабочий кэш — не затираем его моковыми ценами
-                if self._prices_cache:
-                    logger.warning("Оставляем последний успешный кэш цен (API вернул неверный формат)")
+            with self._prices_cache_lock:
+                old_cache = dict(self._prices_cache)
+
+            mode = str(self.price_source_mode or 'v1_first').strip().lower()
+            if mode not in {'v1_first', 'v2_first', 'hybrid'}:
+                mode = 'v1_first'
+
+            selected_cache: Optional[Dict[str, List[Tuple[float, Optional[float], str, bool]]]] = None
+
+            # V1-first: try full-export incremental first, then v2 fallback.
+            if mode in {'v1_first', 'hybrid'}:
+                inc = self._load_prices_full_export_incremental(base_cache=old_cache)
+                if inc is not None:
+                    selected_cache, total_lots = inc
+                    self._total_lots_analyzed = int(total_lots)
+
+            if selected_cache is None and mode in {'v2_first', 'hybrid', 'v1_first'}:
+                v2_cache = self._load_prices_v2()
+                if v2_cache:
+                    selected_cache = v2_cache
+                    self._total_lots_analyzed = sum(len(v) for v in v2_cache.values())
+
+            # If v2-first explicitly requested, optionally enrich with full-export afterwards.
+            if mode == 'v2_first' and selected_cache is not None:
+                inc2 = self._load_prices_full_export_incremental(base_cache=selected_cache)
+                if inc2 is not None:
+                    selected_cache, total_lots = inc2
+                    self._total_lots_analyzed = int(total_lots)
+
+            if not selected_cache:
+                if old_cache:
+                    with self._prices_cache_lock:
+                        self._prices_cache = old_cache
+                        self._last_update_time = time.time()
+                        self._total_lots_analyzed = sum(len(v) for v in old_cache.values())
+                    logger.warning('Price refresh failed; using previous in-memory cache')
                     return False
+                logger.error('Не удалось загрузить ни одного источника цен')
                 return self._load_mock_prices()
-            
-            items = data['items']
 
-            # По умолчанию грузим все файлы (иначе часть скинов будет без цен)
-            if self.files_to_load and self.files_to_load > 0:
-                files_to_load = items[: self.files_to_load]
-            else:
-                files_to_load = items
-            logger.info(f"Загрузка {len(files_to_load)} файлов...")
-            
-            total_lots_processed = 0
-
-            # Собираем новый кэш отдельно, чтобы при ошибке не потерять старый
             with self._prices_cache_lock:
-                old_cache = self._prices_cache
-                old_last_update_time = self._last_update_time
-                old_total_lots_analyzed = self._total_lots_analyzed
-            new_cache: Dict[str, List[Tuple[float, Optional[float], str, bool]]] = {}
-            
-            # Проходим по всем файлам
-            for i, file_name in enumerate(files_to_load):
-                logger.info(f"Загрузка файла {i+1}/{len(files_to_load)}: {file_name}")
-                
-                try:
-                    file_data = self._request_json(
-                        f"{self.base_url}/{file_name}",
-                        timeout=int(self.full_export_file_timeout),
-                        params=self._api_key_params,
-                        close_connection=True,
-                        retries=max(1, int(self.full_export_file_retries) + 1),
-                        backoff_base_seconds=0.25,
-                    )
-                    if file_data is None:
-                        raise RuntimeError('file download failed')
-                    
-                    logger.debug(f"Загрузка файла {file_name}, тип данных: {type(file_data)}")
-                    
-                    lots_in_file = self._parse_file_data(file_data, cache_override=new_cache)
-                    total_lots_processed += lots_in_file
-                    logger.info(f"Файл {file_name}: обработано {lots_in_file} лотов")
-                     
-                except Exception as e:
-                    logger.error(f"Ошибка при загрузке файла {file_name}: {e}")
-                    continue
-
-            # Если не смогли собрать ни одной цены — откатываемся к старому кэшу
-            if not new_cache:
-                with self._prices_cache_lock:
-                    self._prices_cache = old_cache
-                    self._last_update_time = old_last_update_time
-                    self._total_lots_analyzed = old_total_lots_analyzed
-                logger.error("Не удалось загрузить ни одной цены из API; оставляем последний успешный кэш")
-                return False
-            
-            with self._prices_cache_lock:
-                self._prices_cache = new_cache
+                self._prices_cache = selected_cache
                 self._last_update_time = time.time()
-                self._total_lots_analyzed = total_lots_processed
             self._reset_prefix_cache()
-            self._save_disk_cache(new_cache)
-            
-            # Логирование результатов
-            unique_skins = len(self._prices_cache)
-            logger.info(f"Загружено: {unique_skins} уникальных скинов. Цены сконвертированы в USD")
-            logger.info(f"Всего лотов проанализировано: {total_lots_processed}")
-            logger.info("Кэш цен успешно обновлен")
-            
+            self._save_disk_cache(selected_cache)
+
+            logger.info('Кэш цен успешно обновлен (%s), cache_keys=%d lots=%d', mode, len(selected_cache), int(self._total_lots_analyzed or 0))
             return True
-            
+
         except Exception as e:
             logger.error(f"Ошибка при загрузке цен: {e}")
             # Не затираем рабочий кэш моковыми ценами при сетевой ошибке

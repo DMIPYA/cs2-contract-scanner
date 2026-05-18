@@ -106,6 +106,7 @@ class ContractCalculator:
             self.csfloat_fee = 0.02
 
         self._multisource_net_pricing = False
+        self._strict_input_float = str(os.getenv('STRICT_INPUT_FLOAT', '1') or '1').strip().lower() not in {'0', 'false', 'no', 'off'}
 
         self._output_multiplier_threshold = 2.5
         self._filler_to_target_price_ratio = 0.75
@@ -2036,7 +2037,9 @@ class ContractCalculator:
                     refined.append(r)
         finally:
             self._multisource_net_pricing = False
+
             try:
+
                 self.clear_price_memoization()
             except Exception:
                 pass
@@ -4363,6 +4366,8 @@ class ContractCalculator:
             if not price_info:
                 continue
             price, skin_float, wear = price_info
+            if self._strict_input_float and skin_float is None:
+                continue
             if skin_float is None and max_float is not None and float(max_float) < 0.999:
                 allowed_wears = ["Factory New", "Minimal Wear"]
                 if float(max_float) >= 0.38:
@@ -4370,6 +4375,8 @@ class ContractCalculator:
                 if wear not in allowed_wears:
                     continue
             if max_float is not None and skin_float is not None and float(skin_float) > float(max_float):
+                continue
+            if self._strict_input_float and skin_float is None:
                 continue
             if price and price > 0:
                 priced_skins.append({
@@ -4451,6 +4458,8 @@ class ContractCalculator:
                 if not price_info:
                     continue
                 price, skin_float, wear = price_info
+                if self._strict_input_float and skin_float is None:
+                    continue
                 if skin_float is None and max_float_threshold is not None and float(max_float_threshold) < 0.999:
                     allowed_wears = ["Factory New", "Minimal Wear"]
                     if float(max_float_threshold) >= 0.38:
@@ -4461,6 +4470,8 @@ class ContractCalculator:
                     continue
                 if max_float_threshold is not None and skin_float is not None and float(skin_float) > float(max_float_threshold):
                     continue
+                if self._strict_input_float and skin_float is None:
+                    continue
 
                 outcomes_count = self._get_next_grade_skins_count(filler_collection, rarity, is_stattrak)
                 if outcomes_count <= 0:
@@ -4470,7 +4481,7 @@ class ContractCalculator:
                     'name': skin.name,
                     'collection': filler_collection,
                     'price': float(price),
-                    'float': float(skin_float),
+                    'float': float(skin_float) if skin_float is not None else None,
                     'wear': wear,
                     'rarity': self._normalize_rarity(skin.rarity),
                     'outcomes_count': int(outcomes_count),
@@ -4970,7 +4981,7 @@ class ContractCalculator:
         net_profit = ev_after_fee - input_cost
         roi = (net_profit / input_cost) * 100 if input_cost > 0 else 0
 
-        # Align with external calculators: wear is determined by the normalized average float (f')
+        # Align with external calculators: wear is determined by normalized average float (f').
         achievable_wear = self._determine_best_achievable_wear(avg_norm_float)
 
         return {
