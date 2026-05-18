@@ -44,9 +44,9 @@ class MarketCSGOClient:
         self.strict_input_float = str(os.getenv('STRICT_INPUT_FLOAT', '1') or '1').strip().lower() not in {'0', 'false', 'no', 'off'}
         self.full_export_index_cache_path = os.getenv('FULL_EXPORT_INDEX_CACHE', 'full_export_index_cache.json')
         try:
-            self.full_export_workers = max(1, int(os.getenv('FULL_EXPORT_WORKERS', '8') or 8))
+            self.full_export_workers = max(1, int(os.getenv('FULL_EXPORT_WORKERS', '3') or 3))
         except Exception:
-            self.full_export_workers = 8
+            self.full_export_workers = 3
 
         self.sales_history_ttl_seconds = int(os.getenv('MARKET_SALES_HISTORY_TTL', '3600'))  # 1 час по умолчанию
 
@@ -84,6 +84,7 @@ class MarketCSGOClient:
         self._prices_cache_lock = threading.RLock()
         self._last_update_time: float = 0
         self._last_request_time: float = 0
+        self._rate_limit_lock = threading.Lock()
         self._total_lots_analyzed: int = 0
 
         # Кэш для ускорения prefix-match fallback (variant -> list[cache_key])
@@ -166,7 +167,10 @@ class MarketCSGOClient:
                 last_exc = e
                 if attempt + 1 < max(1, req_retries):
                     try:
-                        time.sleep(max(0.0, backoff) * (2 ** attempt))
+                        msg = str(e)
+                        is_429 = ('429' in msg) or ('Too Many Requests' in msg)
+                        mul = 4.0 if is_429 else 1.0
+                        time.sleep(max(0.0, backoff) * (2 ** attempt) * mul)
                     except Exception:
                         pass
                 continue
@@ -562,14 +566,16 @@ class MarketCSGOClient:
         return (time.time() - self._last_update_time) < self.cache_ttl
     
     def _rate_limit(self):
-        """Ограничение частоты запросов"""
-        current_time = time.time()
-        min_interval = float(self.request_min_interval_seconds) if self.request_min_interval_seconds is not None else 0.1
-        if min_interval < 0.0:
-            min_interval = 0.0
-        if current_time - self._last_request_time < min_interval:
-            time.sleep(min_interval)
-        self._last_request_time = time.time()
+        """Ограничение частоты запросов (thread-safe)."""
+        with self._rate_limit_lock:
+            current_time = time.time()
+            min_interval = float(self.request_min_interval_seconds) if self.request_min_interval_seconds is not None else 0.1
+            if min_interval < 0.0:
+                min_interval = 0.0
+            delta = current_time - self._last_request_time
+            if delta < min_interval:
+                time.sleep(min_interval - delta)
+            self._last_request_time = time.time()
     
     def _normalize_skin_name(self, skin_name: str) -> str:
         """Агрессивная нормализация имени скина для максимального маппинга"""
@@ -785,7 +791,11 @@ class MarketCSGOClient:
                     selected_cache, total_lots = inc
                     self._total_lots_analyzed = int(total_lots)
 
-            if selected_cache is None and mode in {'v2_first', 'hybrid', 'v1_first'}:
+            allow_v2_fallback = mode in {'v2_first', 'hybrid'}
+            if self.strict_input_float and mode == 'v1_first':
+                allow_v2_fallback = False
+
+            if selected_cache is None and allow_v2_fallback:
                 v2_cache = self._load_prices_v2()
                 if v2_cache:
                     selected_cache = v2_cache
