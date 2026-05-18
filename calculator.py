@@ -3519,7 +3519,7 @@ class ContractCalculator:
                     'hunt_output': t.get('max_output_name'),
                     'hunt_output_price': t.get('max_output_price'),
                     'hunt_target_wear': t.get('target_wear'),
-                    'hunt_expected_wear': self._determine_best_achievable_wear(float(contract_data.get('average_float') or 0.0)),
+                    'hunt_expected_wear': self._determine_best_achievable_wear(float(contract_data.get('average_normalized_float') or 0.0)),
                     'hunt_input_rarity': input_rarity,
                     'hunt_filler_collection': "+".join(used_collections) if used_collections else None,
                     'hunt_filler_outcomes': (
