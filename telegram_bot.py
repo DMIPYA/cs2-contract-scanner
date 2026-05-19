@@ -564,14 +564,10 @@ def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, cont
             wears_avail = []
         
         # Determine which computed wear buckets are acceptable given target_wear.
-        # Previously we limited to the worst wear listed in the skin data, which caused
-        # valid outcomes to be downgraded when the database lacked explicit entries
-        # for the worst wear (e.g., Battle-Scarred). To ensure correct thresholds we
-        # now treat the target wear as the maximum allowed index, regardless of
-        # missing entries in `wears_avail`. This aligns the bot's calculations with
-        # external calculators that assume all wear levels are possible unless the
-        # skin explicitly cannot reach them.
-        allowed_idxs = list(range(0, t_idx + 1))
+        # Only allow wear levels that are actually available for this skin.
+        # This ensures the bot's calculations match the calculator's logic which
+        # degrades to the nearest worse available wear when a computed wear is not available.
+        allowed_idxs = [i for i in range(0, t_idx + 1) if _WEAR_ORDER[i] in wears_avail]
         
         if not allowed_idxs:
             return (None, False)
