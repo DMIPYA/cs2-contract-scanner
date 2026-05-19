@@ -40,7 +40,7 @@ class MarketCSGOClient:
         self.base_url = 'https://market.csgo.com/api/full-export'
         self.cache_ttl = int(os.getenv('CACHE_TTL', 300))  # 5 минут по умолчанию
         self.files_to_load = int(os.getenv('FULL_EXPORT_FILES_TO_LOAD', '0'))
-        self.price_source_mode = str(os.getenv('PRICE_SOURCE_MODE', 'v1_first') or 'v1_first').strip().lower()
+        self.price_source_mode = str(os.getenv('PRICE_SOURCE_MODE', 'v1_only') or 'v1_only').strip().lower()
         self.strict_input_float = str(os.getenv('STRICT_INPUT_FLOAT', '1') or '1').strip().lower() not in {'0', 'false', 'no', 'off'}
         self.full_export_index_cache_path = os.getenv('FULL_EXPORT_INDEX_CACHE', 'full_export_index_cache.json')
         try:
@@ -86,6 +86,7 @@ class MarketCSGOClient:
         self._last_request_time: float = 0
         self._rate_limit_lock = threading.Lock()
         self._total_lots_analyzed: int = 0
+        self._cache_source: str = 'unknown'
 
         # Кэш для ускорения prefix-match fallback (variant -> list[cache_key])
         # Важно: очищать при обновлении _prices_cache
@@ -169,7 +170,13 @@ class MarketCSGOClient:
                     try:
                         msg = str(e)
                         is_429 = ('429' in msg) or ('Too Many Requests' in msg)
-                        mul = 4.0 if is_429 else 1.0
+                        is_origin_overload = any(x in msg for x in (' 503 ', '503 Server Error', ' 522 ', '522 Server Error', ' 524 ', '524 Server Error', ' 520 ', '520 Server Error'))
+                        if is_429:
+                            mul = 4.0
+                        elif is_origin_overload:
+                            mul = 3.0
+                        else:
+                            mul = 1.0
                         time.sleep(max(0.0, backoff) * (2 ** attempt) * mul)
                     except Exception:
                         pass
@@ -329,6 +336,13 @@ class MarketCSGOClient:
 
             with gzip.open(path, 'rb') as f:
                 obj = pickle.load(f)
+            if isinstance(obj, dict) and ('cache' in obj) and isinstance(obj.get('cache'), dict):
+                meta = obj.get('meta') if isinstance(obj.get('meta'), dict) else {}
+                source = str(meta.get('source') or 'unknown')
+                if self.strict_input_float and self.price_source_mode in {'v1_first', 'v1_only'} and source != 'v1':
+                    logger.warning('Disk cache rejected in strict v1 mode: source=%s', source)
+                    return None
+                obj = obj.get('cache')
             if not isinstance(obj, dict) or not obj:
                 return None
             # Sanitize anomalous prices: collect all prices and remove entries that are
@@ -382,8 +396,15 @@ class MarketCSGOClient:
             if not os.path.isabs(path):
                 path = os.path.join(os.path.dirname(__file__), path)
             tmp_path = f"{path}.tmp"
+            payload = {
+                'meta': {
+                    'source': str(self._cache_source or 'unknown'),
+                    'saved_ts': time.time(),
+                },
+                'cache': cache_obj,
+            }
             with gzip.open(tmp_path, 'wb') as f:
-                pickle.dump(cache_obj, f, protocol=pickle.HIGHEST_PROTOCOL)
+                pickle.dump(payload, f, protocol=pickle.HIGHEST_PROTOCOL)
             os.replace(tmp_path, path)
             try:
                 st = os.stat(path)
@@ -728,6 +749,10 @@ class MarketCSGOClient:
         workers = max(1, int(self.full_export_workers))
         total_lots_processed = 0
         loaded = 0
+        try:
+            min_success_ratio = float(os.getenv('FULL_EXPORT_MIN_SUCCESS_RATIO', '0.70') or 0.70)
+        except Exception:
+            min_success_ratio = 0.70
         with ThreadPoolExecutor(max_workers=workers) as ex:
             futs = [ex.submit(_load_one, fn) for fn in changed_files]
             for fut in as_completed(futs):
@@ -745,6 +770,12 @@ class MarketCSGOClient:
         if not start_cache:
             return None
 
+        changed_cnt = max(1, int(len(changed_files)))
+        success_ratio = float(loaded) / float(changed_cnt)
+        if success_ratio + 1e-12 < float(min_success_ratio):
+            logger.warning('full-export incremental rejected: success_ratio=%.3f loaded=%d changed=%d min_required=%.3f', success_ratio, loaded, len(changed_files), float(min_success_ratio))
+            return None
+
         idx_obj = {
             'files': {f: f for f in files_to_load},
             'updated_ts': time.time(),
@@ -754,7 +785,7 @@ class MarketCSGOClient:
         self._save_full_export_index_cache(idx_obj)
 
         total_lots = sum(len(v) for v in start_cache.values())
-        logger.info('full-export incremental: files=%d changed=%d loaded=%d lots_new=%d cache_keys=%d', len(files_to_load), len(changed_files), loaded, total_lots_processed, len(start_cache))
+        logger.info('full-export incremental: files=%d changed=%d loaded=%d lots_new=%d cache_keys=%d success_ratio=%.3f', len(files_to_load), len(changed_files), loaded, total_lots_processed, len(start_cache), success_ratio)
         return (start_cache, int(total_lots))
 
     def load_prices(self, force_refresh: bool = False) -> bool:
@@ -778,21 +809,22 @@ class MarketCSGOClient:
             with self._prices_cache_lock:
                 old_cache = dict(self._prices_cache)
 
-            mode = str(self.price_source_mode or 'v1_first').strip().lower()
-            if mode not in {'v1_first', 'v2_first', 'hybrid'}:
-                mode = 'v1_first'
+            mode = str(self.price_source_mode or 'v1_only').strip().lower()
+            if mode not in {'v1_only', 'v1_first', 'v2_first', 'hybrid'}:
+                mode = 'v1_only'
 
             selected_cache: Optional[Dict[str, List[Tuple[float, Optional[float], str, bool]]]] = None
 
-            # V1-first: try full-export incremental first, then v2 fallback.
-            if mode in {'v1_first', 'hybrid'}:
+            # V1-only / V1-first: try full-export incremental first.
+            if mode in {'v1_only', 'v1_first', 'hybrid'}:
                 inc = self._load_prices_full_export_incremental(base_cache=old_cache)
                 if inc is not None:
                     selected_cache, total_lots = inc
                     self._total_lots_analyzed = int(total_lots)
+                    self._cache_source = 'v1'
 
             allow_v2_fallback = mode in {'v2_first', 'hybrid'}
-            if self.strict_input_float and mode == 'v1_first':
+            if mode in {'v1_only', 'v1_first'}:
                 allow_v2_fallback = False
 
             if selected_cache is None and allow_v2_fallback:
@@ -800,6 +832,7 @@ class MarketCSGOClient:
                 if v2_cache:
                     selected_cache = v2_cache
                     self._total_lots_analyzed = sum(len(v) for v in v2_cache.values())
+                    self._cache_source = 'v2'
 
             # If v2-first explicitly requested, optionally enrich with full-export afterwards.
             if mode == 'v2_first' and selected_cache is not None:
@@ -807,6 +840,7 @@ class MarketCSGOClient:
                 if inc2 is not None:
                     selected_cache, total_lots = inc2
                     self._total_lots_analyzed = int(total_lots)
+                    self._cache_source = 'v1'
 
             if not selected_cache:
                 if old_cache:
@@ -817,6 +851,9 @@ class MarketCSGOClient:
                     logger.warning('Price refresh failed; using previous in-memory cache')
                     return False
                 logger.error('Не удалось загрузить ни одного источника цен')
+                if mode in {'v1_only', 'v1_first'}:
+                    # Accuracy-first strict mode: avoid mock/v2 approximation fallback.
+                    return False
                 return self._load_mock_prices()
 
             with self._prices_cache_lock:
