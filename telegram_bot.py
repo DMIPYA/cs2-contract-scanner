@@ -575,12 +575,14 @@ def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, cont
         max_allowed_idx = max(allowed_idxs)
         max_allowed_wear = _WEAR_ORDER[max_allowed_idx]
         
-        # For Battle-Scarred, use the skin's max_float instead of 1.0
-        # For other wears, use threshold minus epsilon to ensure we stay below the boundary
+        # Шаг 7: CS2 использует включительные верхние границы для всех wear
+        # FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
+        # Для Battle-Scarred используем max_f скина
         if max_allowed_wear == 'Battle-Scarred':
             max_out_float_ok = float(max_f)
         else:
-            max_out_float_ok = float(_WEAR_THRESHOLDS.get(max_allowed_wear, 1.0)) - 0.0001
+            # Используем сам порог (включительно) без epsilon
+            max_out_float_ok = float(_WEAR_THRESHOLDS.get(max_allowed_wear, 1.0))
 
         thr_i = (max_out_float_ok - float(min_f)) / float(denom)
         if thr_i < 0.0:

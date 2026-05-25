@@ -1603,7 +1603,7 @@ class ContractCalculator:
                                 'hunt_output': str(current_best_out.get('name') or ''),
                                 'hunt_output_price': float(current_best_out.get('price') or 0.0),
                                 'hunt_target_wear': best_wear,
-                                'hunt_expected_wear': self._determine_best_achievable_wear(float(current_eval.get('average_normalized_float') or 0.0)),
+                                'hunt_expected_wear': self._determine_wear_from_float(float(current_eval.get('average_float') or 0.0)),
                                 'hunt_input_rarity': self._normalize_rarity(input_rarity),
                                 'hunt_filler_collection': filler_c,
                                 'chance_of_target': float(current_chance_target),
@@ -2155,41 +2155,39 @@ class ContractCalculator:
         
         current_skins = [dict(s) for s in contract_skins]
         
-        # Calculate current total weighted normalized float
-        # out_float = avg_norm * (max_f - min_f) + min_f
-        # We need to solve for avg_norm such that out_float <= threshold for ALL possible outcomes.
-        # But wait, the system uses average_normalized_float (avg_norm) across all inputs.
-        # Each output has its own [min_f, max_f].
+        # Шаг 6: Используем avg_float (абсолютное среднее) вместо avg_norm
+        # out_float = avg_float * (max_f - min_f) + min_f
+        # Условие: out_float <= threshold → avg_float <= (threshold - min_f) / (max_f - min_f)
         
         outcomes = self.calculate_contract_outcomes_details(current_skins, is_stattrak=is_stattrak)
         if not outcomes:
             return None
 
         # Determine the bottleneck: which outcome hits the threshold first?
-        # out_float_i = avg_norm * (max_i - min_i) + min_i
-        # avg_norm = (out_float_i - min_i) / (max_i - min_i)
+        # out_float_i = avg_float * (max_i - min_i) + min_i
+        # avg_float <= (threshold - min_i) / (max_i - min_i)
         
-        limit_avg_norm = 1.0
+        limit_avg_float = 1.0
         for o in outcomes:
             min_f = float(o.get('min_float', 0.0))
             max_f = float(o.get('max_float', 1.0))
             denom = max_f - min_f
             if denom > 1e-9:
-                # Max allowed avg_norm for this specific outcome to stay within target_wear
+                # Max allowed avg_float for this specific outcome to stay within target_wear
                 # (threshold - min_f) / (max_f - min_f)
-                max_norm_for_this = (target_max_avg_norm - min_f) / denom
-                if max_norm_for_this < limit_avg_norm:
-                    limit_avg_norm = max_norm_for_this
+                max_float_for_this = (target_max_avg_norm - min_f) / denom
+                if max_float_for_this < limit_avg_float:
+                    limit_avg_float = max_float_for_this
 
-        # Apply safety margin to the bottleneck avg_norm
-        target_avg_norm = max(0.0, limit_avg_norm * 0.998)
+        # Apply safety margin to the bottleneck avg_float
+        target_avg_float = max(0.0, limit_avg_float * 0.998)
         
         # Store the target max avg float in the contract dict for UI
         for s in current_skins:
-            s['target_max_avg_float'] = round(target_avg_norm, 6)
+            s['target_max_avg_float'] = round(target_avg_float, 6)
         
-        # We want sum(norm_floats) / 10 <= target_avg_norm
-        target_total_norm = target_avg_norm * 10.0
+        # We want sum(floats) / 10 <= target_avg_float
+        target_total_float = target_avg_float * 10.0
         
         # Sort skins by price (descending) or by how much we can "worsen" them?
         # Let's try to worsen the most expensive skins first to get the most profit.
@@ -2215,26 +2213,23 @@ class ContractCalculator:
             if max_f <= min_f + 1e-9:
                 continue
 
-            # Current normalized float of this skin
+            # Current absolute float of this skin
             curr_f = float(skin.get('float', 0.0))
-            curr_norm = (curr_f - min_f) / (max_f - min_f)
             
-            # Other skins total norm
-            other_total_norm = sum((float(s.get('float', 0.0)) - float(self.database.get_skin_by_name(s['name']).min_float)) / 
-                                   (float(self.database.get_skin_by_name(s['name']).max_float) - float(self.database.get_skin_by_name(s['name']).min_float))
-                                   for j, s in enumerate(current_skins) if i != j)
+            # Other skins total float
+            other_total_float = sum(float(s.get('float', 0.0)) for j, s in enumerate(current_skins) if i != j)
             
-            # Max allowed norm for THIS skin
-            max_norm_allowed = target_total_norm - other_total_norm
-            if max_norm_allowed > 1.0:
-                max_norm_allowed = 1.0
+            # Max allowed float for THIS skin
+            max_float_allowed = target_total_float - other_total_float
+            if max_float_allowed > 1.0:
+                max_float_allowed = 1.0
             
-            if max_norm_allowed <= curr_norm + 1e-4:
+            if max_float_allowed <= curr_f + 1e-4:
                 # Already at the limit or no room to worsen
                 continue
                 
-            # Convert back to actual float
-            max_actual_float = max_norm_allowed * (max_f - min_f) + min_f
+            # Use the max allowed float directly (no conversion needed)
+            max_actual_float = max_float_allowed
             
             # Find the best (cheapest) skin on the market with float <= max_actual_float
             # and hopefully float > curr_f
@@ -2422,8 +2417,8 @@ class ContractCalculator:
                             continue
 
                         out_prob = float(current_eval.get('output_probability') or 0.0)
-                        avg_norm_float = float(current_eval.get('average_normalized_float') or 0.0)
-                        expected_wear = self._determine_best_achievable_wear(avg_norm_float)
+                        avg_float_val = float(current_eval.get('average_float') or 0.0)
+                        expected_wear = self._determine_wear_from_float(avg_float_val)
 
                         out_name = None
                         out_price = 0.0
@@ -2913,12 +2908,13 @@ class ContractCalculator:
         # Рассчитываем средний float входных скинов
         avg_input_float = sum(input_floats) / len(input_floats)
         
-        # Определяем возможное качество результата
+        # Определяем возможное качество результата (CS2 алгоритм)
+        # Используем <= для верхней границы (включительно)
         quality_thresholds = {
             "Factory New": 0.07,
             "Minimal Wear": 0.15,
-    "Field-Tested": 0.38,
-            "Well-Worn": 0.44,
+            "Field-Tested": 0.38,
+            "Well-Worn": 0.45,  # Исправлено: было 0.44
             "Battle-Scarred": 1.0
         }
         
@@ -2931,20 +2927,23 @@ class ContractCalculator:
         return {
             "avg_input_float": avg_input_float,
             "result_quality": result_quality,
-            "can_be_fn": avg_input_float < 0.07,
-            "can_be_mw": avg_input_float < 0.15,
+            "can_be_fn": avg_input_float <= 0.07,  # Исправлено: <= вместо <
+            "can_be_mw": avg_input_float <= 0.15,  # Исправлено: <= вместо <
             "quality_leap": self._calculate_quality_leap(input_floats, avg_input_float)
         }
     
     def _calculate_quality_leap(self, input_floats: List[float], avg_float: float) -> str:
-        """Рассчитывает тип перехода качества"""
-        if avg_float < 0.07:
+        """Рассчитывает тип перехода качества (CS2 алгоритм).
+        
+        Используем <= для верхней границы (включительно).
+        """
+        if avg_float <= 0.07:
             return "FN Leap"
-        elif avg_float < 0.15:
-            return "MW Leap"  
-        elif avg_float < 0.38:
+        elif avg_float <= 0.15:
+            return "MW Leap"
+        elif avg_float <= 0.38:
             return "FT Standard"
-        elif avg_float < 0.45:
+        elif avg_float <= 0.45:
             return "WW Standard"
         else:
             return "BS Standard"
@@ -3512,7 +3511,7 @@ class ContractCalculator:
                     'hunt_output': t.get('max_output_name'),
                     'hunt_output_price': t.get('max_output_price'),
                     'hunt_target_wear': t.get('target_wear'),
-                    'hunt_expected_wear': self._determine_best_achievable_wear(float(contract_data.get('average_normalized_float') or 0.0)),
+                    'hunt_expected_wear': self._determine_wear_from_float(float(contract_data.get('average_float') or 0.0)),
                     'hunt_input_rarity': input_rarity,
                     'hunt_filler_collection': "+".join(used_collections) if used_collections else None,
                     'hunt_filler_outcomes': (
@@ -4681,6 +4680,47 @@ class ContractCalculator:
 
         return total / valid if valid > 0 else 0.0
 
+    def _calculate_skinsearch_normalized_float(
+        self,
+        contract_skins: List[Dict],
+        output_min_float: float,
+        output_max_float: float
+    ) -> float:
+        """
+        Рассчитывает нормализованный float согласно алгоритму skinsearch/CS2.
+        
+        Формула: f' = (avg_float - min_f_output) / (max_f_output - min_f_output)
+        
+        Где avg_float — среднее абсолютных float входных скинов,
+        а min_f_output/max_f_output — диапазон ВЫХОДНОГО скина.
+        
+        Edge cases:
+        - max_f_output - min_f_output <= 0 → 0.0 (скин с фиксированным float)
+        - avg_float < min_f_output → clamped до 0.0
+        - avg_float > max_f_output → clamped до 1.0
+        """
+        if not contract_skins:
+            return 0.0
+        
+        # Расчет среднего абсолютного float
+        avg_float = self._calculate_average_float(contract_skins)
+        
+        # Edge case: скин с фиксированным float
+        output_range = output_max_float - output_min_float
+        if output_range <= 1e-9:
+            return 0.0
+        
+        # Нормализация относительно выходного скина
+        norm = (avg_float - output_min_float) / output_range
+        
+        # Clamping
+        if norm < 0.0:
+            norm = 0.0
+        if norm > 1.0:
+            norm = 1.0
+        
+        return norm
+
     def _calculate_weighted_average_normalized_float(self, contract_skins: List[Dict], is_stattrak: bool) -> float:
         """
         Рассчитывает weighted average normalized float согласно алгоритму skinsearch.
@@ -4788,23 +4828,28 @@ class ContractCalculator:
         """
         f = float(item_float)
 
-        if f < 0.07:
+        # CS2 wear ranges (inclusive upper bound):
+        # FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
+        if f <= 0.07:
             return 'Factory New'
-        elif f < 0.15:
+        elif f <= 0.15:
             return 'Minimal Wear'
-        elif f < 0.38:
+        elif f <= 0.38:
             return 'Field-Tested'
-        elif f < 0.45:
+        elif f <= 0.45:
             return 'Well-Worn'
         else:
             return 'Battle-Scarred'
 
     def calculate_contract_outcomes_details(self, contract_skins: List[Dict], is_stattrak: bool) -> List[Dict]:
-        avg_norm = self._calculate_average_normalized_float(contract_skins)
-        if avg_norm < 0.0:
-            avg_norm = 0.0
-        if avg_norm > 1.0:
-            avg_norm = 1.0
+        # Шаг 2: Используем avg_float (абсолютное среднее) вместо avg_norm (нормализованное)
+        # Формула CS2: out_float = avg_float * (max_f - min_f) + min_f
+        avg_float = self._calculate_average_float(contract_skins)
+        if avg_float < 0.0:
+            avg_float = 0.0
+        if avg_float > 1.0:
+            avg_float = 1.0
+        
         input_rarity = contract_skins[0].get('rarity') if contract_skins else None
         if not input_rarity:
             return []
@@ -4855,7 +4900,7 @@ class ContractCalculator:
                 if max_f <= min_f + 1e-9:
                     min_f, max_f = 0.0, 1.0
 
-                out_float = float(avg_norm) * (max_f - min_f) + min_f
+                out_float = float(avg_float) * (max_f - min_f) + min_f
                 wear = self._determine_wear_from_float(out_float)
 
                 # Ensure the computed wear exists for this skin. If not, degrade to the nearest worse available wear.
@@ -4981,8 +5026,8 @@ class ContractCalculator:
         net_profit = ev_after_fee - input_cost
         roi = (net_profit / input_cost) * 100 if input_cost > 0 else 0
 
-        # Align with external calculators: wear is determined by normalized average float (f').
-        achievable_wear = self._determine_best_achievable_wear(avg_norm_float)
+        # Шаг 3: Определяем achievable_wear по абсолютному avg_float (CS2 алгоритм)
+        achievable_wear = self._determine_wear_from_float(avg_float)
 
         return {
             'input_cost': input_cost,

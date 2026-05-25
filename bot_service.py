@@ -8,7 +8,7 @@ import os
 from dotenv import load_dotenv, dotenv_values
 
 from database import CS2Database
-from api_client import PriceManager
+from api_client import PriceManager, MARKET_CACHE_VERSION
 from calculator import ContractCalculator
 
 
@@ -78,6 +78,15 @@ class TargetHuntingService:
         self.database = CS2Database()
         self.price_manager = PriceManager()
         self.calculator: Optional[ContractCalculator] = None
+
+        # Шаг 8: Очистка кэша при старте после изменения алгоритма расчёта wear
+        # Это гарантирует, что старый кэш с неверными wear-метками не будет использоваться
+        try:
+            if hasattr(self.price_manager, 'clear_price_memoization'):
+                self.price_manager.clear_price_memoization()
+                logging.getLogger().info('Price memoization cleared on startup (cache_version=%s)', MARKET_CACHE_VERSION)
+        except Exception as e:
+            logging.getLogger().warning('Failed to clear price memoization on startup: %s', e)
 
         self._cache_lock = threading.Lock()
         self._cache: Dict[str, Dict] = {}

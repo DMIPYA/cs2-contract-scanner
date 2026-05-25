@@ -1,5 +1,9 @@
 import os
 import time
+
+# Версия кэша для инвалидации при изменении алгоритма расчёта wear
+# Увеличивать при каждом изменении логики расчёта float/wear
+MARKET_CACHE_VERSION = 2
 import json
 import gzip
 import pickle
@@ -339,6 +343,11 @@ class MarketCSGOClient:
             if isinstance(obj, dict) and ('cache' in obj) and isinstance(obj.get('cache'), dict):
                 meta = obj.get('meta') if isinstance(obj.get('meta'), dict) else {}
                 source = str(meta.get('source') or 'unknown')
+                cache_version = int(meta.get('version') or 0)
+                # Шаг 8: инвалидация кэша при изменении версии алгоритма
+                if cache_version != MARKET_CACHE_VERSION:
+                    logger.warning('Disk cache rejected: version mismatch (cache=%s current=%s)', cache_version, MARKET_CACHE_VERSION)
+                    return None
                 if self.strict_input_float and self.price_source_mode in {'v1_first', 'v1_only'} and source != 'v1':
                     logger.warning('Disk cache rejected in strict v1 mode: source=%s', source)
                     return None
@@ -400,6 +409,7 @@ class MarketCSGOClient:
                 'meta': {
                     'source': str(self._cache_source or 'unknown'),
                     'saved_ts': time.time(),
+                    'version': MARKET_CACHE_VERSION,  # Шаг 8: версия для инвалидации кэша
                 },
                 'cache': cache_obj,
             }
@@ -1010,19 +1020,24 @@ class MarketCSGOClient:
             return "Unknown"
 
     def _determine_wear_from_float(self, item_float: float) -> str:
-        """Определяет качество по float (если quality нет в названии full-export)."""
+        """Определяет качество по float (если quality нет в названии full-export).
+        
+        CS2 wear ranges (inclusive upper bound):
+        FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
+        """
         try:
             f = float(item_float)
         except Exception:
             return "Unknown"
 
-        if f < 0.07:
+        # Используем <= для верхней границы (включительно)
+        if f <= 0.07:
             return "Factory New"
-        if f < 0.15:
+        if f <= 0.15:
             return "Minimal Wear"
-        if f < 0.38:
+        if f <= 0.38:
             return "Field-Tested"
-        if f < 0.45:
+        if f <= 0.45:
             return "Well-Worn"
         return "Battle-Scarred"
     
