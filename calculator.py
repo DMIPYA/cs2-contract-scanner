@@ -13,6 +13,7 @@ from collections import Counter
 import statistics
 from database import CS2Database, SkinData
 from api_client import PriceManager
+from calculator_price_lookup import _PriceLookupMixin
 
 
 @dataclass
@@ -38,7 +39,7 @@ class SkinProbability:
     rarity: str
 
 
-class ContractCalculator:
+class ContractCalculator(_PriceLookupMixin):
     """Калькулятор контрактов CS2 с реальными данными"""
     
     def __init__(self, database: CS2Database, price_manager: PriceManager):
@@ -68,7 +69,15 @@ class ContractCalculator:
         self._memo_contract_target_prob: Dict[Tuple, float] = {}
         self._memo_contract_max_output: Dict[Tuple, float] = {}
         self._memo_contract_craftability: Dict[Tuple, Dict] = {}
-        self._memo_lock = threading.Lock()
+
+        # Гранулярные блокировки для memo-словарей (см. optimization-roadmap.md Step 2)
+        # При добавлении нового memo-словаря — добавить lock в соответствующую группу
+        self._lock_listings = threading.Lock()          # _memo_listings
+        self._lock_sell_price = threading.Lock()        # _memo_effective_sell_price
+        self._lock_price_float = threading.Lock()       # _memo_price_with_float, _memo_price
+        self._lock_main_skins = threading.Lock()        # _memo_main_skins
+        self._lock_next_grade = threading.Lock()        # _memo_next_grade_count, _memo_possible_outputs, _memo_collection_imbalance, _memo_collection_avg_outcome_price, _memo_collection_score
+        self._lock_contract_eval = threading.Lock()     # _memo_contract_eval, _memo_contract_craftability, _memo_contract_target_prob, _memo_contract_max_output, _memo_target_rank
 
         self._last_target_suite_diagnostics: Optional[Dict] = None
         self.rarities_hierarchy = {
@@ -164,13 +173,13 @@ class ContractCalculator:
     ) -> Optional[float]:
         input_rarity = self._normalize_rarity(input_rarity)
         key = (collection_name, input_rarity, bool(is_stattrak), str(target_wear))
-        with self._memo_lock:
+        with self._lock_next_grade:
             if key in self._memo_collection_avg_outcome_price:
                 return self._memo_collection_avg_outcome_price[key]
 
-        outs = self._get_possible_outputs(collection_name, input_rarity, target_wear='Factory New', is_stattrak=is_stattrak)
+        outs = self._get_possible_outputs(collection_name, input_rarity, average_float=None, is_stattrak=is_stattrak)
         if not outs:
-            with self._memo_lock:
+            with self._lock_next_grade:
                 self._memo_collection_avg_outcome_price[key] = None
             return None
 
@@ -188,19 +197,19 @@ class ContractCalculator:
                 prices.append(float(p))
 
         if not prices:
-            with self._memo_lock:
+            with self._lock_next_grade:
                 self._memo_collection_avg_outcome_price[key] = None
             return None
 
         val = float(sum(prices)) / float(len(prices))
-        with self._memo_lock:
+        with self._lock_next_grade:
             self._memo_collection_avg_outcome_price[key] = float(val)
         return float(val)
 
     def _collection_score(self, collection_name: str, input_rarity: str, *, is_stattrak: bool) -> Optional[float]:
         input_rarity = self._normalize_rarity(input_rarity)
         key = (collection_name, input_rarity, bool(is_stattrak))
-        with self._memo_lock:
+        with self._lock_next_grade:
             if key in self._memo_collection_score:
                 return self._memo_collection_score[key]
 
@@ -210,11 +219,11 @@ class ContractCalculator:
             if p and float(p) > 0:
                 prices.append(float(p))
         if not prices:
-            with self._memo_lock:
+            with self._lock_next_grade:
                 self._memo_collection_score[key] = None
             return None
         score = max(prices)
-        with self._memo_lock:
+        with self._lock_next_grade:
             self._memo_collection_score[key] = float(score)
         return float(score)
 
@@ -372,7 +381,7 @@ class ContractCalculator:
     ) -> List[Tuple[float, Optional[float], str]]:
         mf = None if max_float is None else round(float(max_float), 4)
         key = (skin_name, target_wear, mf, bool(exclude_stattrak), bool(require_stattrak), bool(strict_name_match), bool(allow_refresh), int(limit))
-        with self._memo_lock:
+        with self._lock_listings:
             cached = self._memo_listings.get(key)
         if cached is not None:
             return list(cached)
@@ -387,7 +396,7 @@ class ContractCalculator:
             allow_refresh=allow_refresh,
             limit=limit,
         )
-        with self._memo_lock:
+        with self._lock_listings:
             self._memo_listings[key] = list(lots)
         return list(lots)
 
@@ -404,7 +413,7 @@ class ContractCalculator:
     ) -> Optional[float]:
         mf = None if max_float is None else round(float(max_float), 4)
         key = (skin_name, target_wear, mf, bool(exclude_stattrak), bool(require_stattrak), bool(strict_name_match), bool(allow_refresh))
-        with self._memo_lock:
+        with self._lock_sell_price:
             cached = self._memo_effective_sell_price.get(key)
         if cached is not None:
             return cached
@@ -458,7 +467,7 @@ class ContractCalculator:
             allow_refresh=allow_refresh2,
         )
         val2 = float(val) if val is not None else None
-        with self._memo_lock:
+        with self._lock_sell_price:
             self._memo_effective_sell_price[key] = val2
         return val2
 
@@ -543,7 +552,7 @@ class ContractCalculator:
             target_collection,
             bool(is_stattrak),
         )
-        with self._memo_lock:
+        with self._lock_contract_eval:
             cached = self._memo_contract_eval.get(key)
             if cached is not None:
                 try:
@@ -553,7 +562,7 @@ class ContractCalculator:
         if cached is not None:
             return dict(cached)
         val = self._calculate_contract_profit(contract_skins, target_collection, is_stattrak=is_stattrak)
-        with self._memo_lock:
+        with self._lock_contract_eval:
             try:
                 self._memo_contract_eval[key] = dict(val)
                 try:
@@ -598,7 +607,7 @@ class ContractCalculator:
             bool(allow_unknown_float),
             bool(allow_refresh),
         )
-        with self._memo_lock:
+        with self._lock_contract_eval:
             cached = self._memo_contract_craftability.get(key)
         if cached is not None:
             return dict(cached)
@@ -612,7 +621,7 @@ class ContractCalculator:
                 'required_slots': 0,
                 'matched_slots': 0,
             }
-            with self._memo_lock:
+            with self._lock_contract_eval:
                 self._memo_contract_craftability[key] = dict(result)
             return dict(result)
 
@@ -635,7 +644,7 @@ class ContractCalculator:
                     'required_slots': 0,
                     'matched_slots': 0,
                 }
-                with self._memo_lock:
+                with self._lock_contract_eval:
                     self._memo_contract_craftability[key] = dict(result)
                 return dict(result)
 
@@ -654,7 +663,7 @@ class ContractCalculator:
                     'required_slots': 1,
                     'matched_slots': 0,
                 }
-                with self._memo_lock:
+                with self._lock_contract_eval:
                     self._memo_contract_craftability[key] = dict(result)
                 return dict(result)
             cap_f = 1.0
@@ -718,7 +727,7 @@ class ContractCalculator:
                         'required_slots': int(limiting_required),
                         'matched_slots': int(limiting_matched),
                     }
-                    with self._memo_lock:
+                    with self._lock_contract_eval:
                         self._memo_contract_craftability[key] = dict(result)
                     return dict(result)
 
@@ -730,20 +739,20 @@ class ContractCalculator:
             'required_slots': int(len(contract_skins)),
             'matched_slots': int(len(contract_skins)),
         }
-        with self._memo_lock:
+        with self._lock_contract_eval:
             self._memo_contract_craftability[key] = dict(result)
         return dict(result)
 
     def _collection_imbalance_ratio(self, collection_name: str, input_rarity: str, *, is_stattrak: bool) -> Optional[float]:
         input_rarity = self._normalize_rarity(input_rarity)
         memo_key = (collection_name, input_rarity, bool(is_stattrak))
-        with self._memo_lock:
+        with self._lock_contract_eval:
             cached = self._memo_collection_imbalance.get(memo_key)
         if cached is not None:
             return float(cached)
 
         best_wear = self._best_target_wear(collection_name, input_rarity, is_stattrak=is_stattrak)
-        outs = self._get_possible_outputs(collection_name, input_rarity, target_wear='Factory New', is_stattrak=is_stattrak)
+        outs = self._get_possible_outputs(collection_name, input_rarity, average_float=None, is_stattrak=is_stattrak)
         prices: List[float] = []
         for o in outs:
             p = self._cached_get_price(
@@ -767,7 +776,7 @@ class ContractCalculator:
             if med > 1e-12 and mx > 0:
                 ratio = mx / med
 
-        with self._memo_lock:
+        with self._lock_contract_eval:
             self._memo_collection_imbalance[memo_key] = float(ratio) if ratio is not None else None
         return float(ratio) if ratio is not None else None
 
@@ -781,7 +790,7 @@ class ContractCalculator:
     ) -> List[Dict]:
         input_rarity = self._normalize_rarity(input_rarity)
         memo_key = (input_rarity, bool(is_stattrak), float(min_imbalance_ratio), int(max_targets))
-        with self._memo_lock:
+        with self._lock_contract_eval:
             cached = self._memo_target_rank.get(memo_key)
         if cached is not None:
             return list(cached)
@@ -814,7 +823,7 @@ class ContractCalculator:
             collections_passed_imb += 1
 
             best_wear = self._best_target_wear(c, input_rarity, is_stattrak=is_stattrak)
-            outs = self._get_possible_outputs(c, input_rarity, target_wear='Factory New', is_stattrak=is_stattrak)
+            outs = self._get_possible_outputs(c, input_rarity, average_float=None, is_stattrak=is_stattrak)
             outcomes_count = self._get_next_grade_skins_count(c, input_rarity, is_stattrak=is_stattrak)
             outcomes_count = max(0, int(outcomes_count))
             if outcomes_count <= 0:
@@ -908,7 +917,7 @@ class ContractCalculator:
                 )
             except Exception:
                 pass
-        with self._memo_lock:
+        with self._lock_contract_eval:
             self._memo_target_rank[memo_key] = list(targets)
         return list(targets)
 
@@ -928,7 +937,7 @@ class ContractCalculator:
             str(target_skin),
             bool(is_stattrak),
         )
-        with self._memo_lock:
+        with self._lock_contract_eval:
             cached = self._memo_contract_target_prob.get(key)
         if cached is not None:
             return float(cached)
@@ -943,7 +952,7 @@ class ContractCalculator:
                 prob = float(o.get('probability') or 0.0)
                 break
 
-        with self._memo_lock:
+        with self._lock_contract_eval:
             self._memo_contract_target_prob[key] = float(prob)
         return float(prob)
 
@@ -962,7 +971,7 @@ class ContractCalculator:
             ),
             bool(is_stattrak),
         )
-        with self._memo_lock:
+        with self._lock_contract_eval:
             cached = self._memo_contract_max_output.get(key)
         if cached is not None:
             return float(cached)
@@ -977,7 +986,7 @@ class ContractCalculator:
             if p > mx:
                 mx = p
 
-        with self._memo_lock:
+        with self._lock_contract_eval:
             self._memo_contract_max_output[key] = float(mx)
         return float(mx)
 
@@ -2422,7 +2431,7 @@ class ContractCalculator:
 
                         out_name = None
                         out_price = 0.0
-                        outs = self._get_possible_outputs(target_c, input_rarity, target_wear='Factory New', is_stattrak=is_stattrak)
+                        outs = self._get_possible_outputs(target_c, input_rarity, average_float=avg_float_val, is_stattrak=is_stattrak)
                         for o in outs:
                             p = self._cached_get_price(
                                 o['name'],
@@ -2623,7 +2632,7 @@ class ContractCalculator:
             return None
 
         max_output_price = 0.0
-        outputs = self._get_possible_outputs(collection_name, input_rarity, target_wear="Factory New", is_stattrak=is_stattrak)
+        outputs = self._get_possible_outputs(collection_name, input_rarity, average_float=None, is_stattrak=is_stattrak)
         if not outputs:
             return None
 
@@ -2697,7 +2706,7 @@ class ContractCalculator:
     ) -> Optional[Tuple[float, float, str]]:
         mf = None if max_float is None else round(float(max_float), 4)
         key = (skin_name, target_wear, mf, bool(exclude_stattrak), bool(require_stattrak), bool(strict_name_match), bool(allow_refresh))
-        with self._memo_lock:
+        with self._lock_price_float:
             if key in self._memo_price_with_float:
                 return self._memo_price_with_float[key]
         val = self.price_manager.get_price_with_float(
@@ -2713,7 +2722,7 @@ class ContractCalculator:
         # If strict name match fails, retry with relaxed matching once and memoize under both keys.
         if not val and bool(strict_name_match):
             key_relaxed = (skin_name, target_wear, mf, bool(exclude_stattrak), bool(require_stattrak), False, bool(allow_refresh))
-            with self._memo_lock:
+            with self._lock_price_float:
                 cached_relaxed = self._memo_price_with_float.get(key_relaxed)
             if cached_relaxed is not None:
                 val = cached_relaxed
@@ -2727,10 +2736,10 @@ class ContractCalculator:
                     strict_name_match=False,
                     allow_refresh=allow_refresh,
                 )
-                with self._memo_lock:
+                with self._lock_price_float:
                     self._memo_price_with_float[key_relaxed] = val
 
-        with self._memo_lock:
+        with self._lock_price_float:
             self._memo_price_with_float[key] = val
         return val
 
@@ -2747,7 +2756,7 @@ class ContractCalculator:
     ) -> Optional[float]:
         mf = None if max_float is None else round(float(max_float), 4)
         key = (skin_name, target_wear, mf, bool(exclude_stattrak), bool(require_stattrak), bool(strict_name_match), bool(allow_refresh))
-        with self._memo_lock:
+        with self._lock_price_float:
             if key in self._memo_price:
                 return self._memo_price[key]
         val = self.price_manager.get_price(
@@ -2762,7 +2771,7 @@ class ContractCalculator:
 
         if (val is None or float(val) <= 0) and bool(strict_name_match):
             key_relaxed = (skin_name, target_wear, mf, bool(exclude_stattrak), bool(require_stattrak), False, bool(allow_refresh))
-            with self._memo_lock:
+            with self._lock_price_float:
                 cached_relaxed = self._memo_price.get(key_relaxed)
             if cached_relaxed is not None:
                 val = cached_relaxed
@@ -2776,24 +2785,30 @@ class ContractCalculator:
                     strict_name_match=False,
                     allow_refresh=allow_refresh,
                 )
-                with self._memo_lock:
+                with self._lock_price_float:
                     self._memo_price[key_relaxed] = val
 
-        with self._memo_lock:
+        with self._lock_price_float:
             self._memo_price[key] = val
         return val
 
     def clear_price_memoization(self) -> None:
-        with self._memo_lock:
-            self._memo_price.clear()
-            self._memo_price_with_float.clear()
-            self._memo_listings.clear()
-            self._memo_effective_sell_price.clear()
-            self._memo_contract_eval.clear()
-            self._memo_contract_craftability.clear()
-            self._memo_collection_avg_outcome_price.clear()
-            self._memo_collection_score.clear()
-            self._memo_collection_imbalance.clear()
+        # Захват всех гранулярных lock в алфавитном порядке для предотвращения deadlock
+        with self._lock_contract_eval:
+            with self._lock_listings:
+                with self._lock_main_skins:
+                    with self._lock_next_grade:
+                        with self._lock_price_float:
+                            with self._lock_sell_price:
+                                self._memo_price.clear()
+                                self._memo_price_with_float.clear()
+                                self._memo_listings.clear()
+                                self._memo_effective_sell_price.clear()
+                                self._memo_contract_eval.clear()
+                                self._memo_contract_craftability.clear()
+                                self._memo_collection_avg_outcome_price.clear()
+                                self._memo_collection_score.clear()
+                                self._memo_collection_imbalance.clear()
     
     def _normalize_rarity(self, rarity_name: Optional[str]) -> Optional[str]:
         if not rarity_name:
@@ -3348,7 +3363,7 @@ class ContractCalculator:
 
                     # Ищем самый дорогой выход по каждому wear
                     for wear in wears:
-                        outputs = self._get_possible_outputs(collection_name, input_rarity, wear, is_stattrak)
+                        outputs = self._get_possible_outputs(collection_name, input_rarity, average_float=None, is_stattrak=is_stattrak)
                         if not outputs:
                             continue
 
@@ -3643,7 +3658,7 @@ class ContractCalculator:
                 outputs = self._get_possible_outputs(
                     target_c,
                     input_rarity,
-                    target_wear="Factory New",
+                    average_float=None,
                     is_stattrak=is_stattrak,
                 )
                 if not outputs:
@@ -4304,7 +4319,7 @@ class ContractCalculator:
         rarity_norm = self._normalize_rarity(rarity) if rarity else None
         mf = round(float(max_float), 4) if max_float is not None else None
         memo_key = (collection, int(count), bool(is_stattrak), rarity_norm, mf)
-        with self._memo_lock:
+        with self._lock_main_skins:
             cached = self._memo_main_skins.get(memo_key)
         if cached is not None:
             return list(cached)
@@ -4318,78 +4333,30 @@ class ContractCalculator:
         # Получаем цены и сортируем
         priced_skins = []
         for skin in collection_skins:
-            # Важно: если всегда брать самый дешевый лот без ограничений, чаще всего
-            # это будет Battle-Scarred с высоким float, и контракты станут невозможны.
-            # Поэтому сначала пытаемся подобрать лот с ограничением max_float.
-            price_info = None
-            if max_float is not None:
-                price_info = self._cached_get_price_with_float(
-                    skin.name,
-                    max_float=max_float,
-                    exclude_stattrak=not is_stattrak,
-                    require_stattrak=bool(is_stattrak),
-                    strict_name_match=True,
-                    allow_refresh=False,
-                )
-                if not price_info:
-                    price_info = self._cached_get_price_with_float(
-                        skin.name,
-                        max_float=max_float,
-                        exclude_stattrak=not is_stattrak,
-                        require_stattrak=bool(is_stattrak),
-                        strict_name_match=False,
-                        allow_refresh=False,
-                    )
+            price_info = self._get_skin_price_info(
+                skin.name,
+                max_float=max_float,
+                exclude_stattrak=not is_stattrak,
+                require_stattrak=bool(is_stattrak),
+                strict_name_match=True,
+                allow_refresh=False,
+            )
             if not price_info:
-                price_info = self._cached_get_price_with_float(
-                    skin.name,
-                    # Не делаем max_float обязательным: если float отсутствует в прайсах,
-                    # берём лот и дальше попробуем оценить float по wear.
-                    target_wear=None,
-                    max_float=None,
-                    exclude_stattrak=not is_stattrak,
-                    require_stattrak=bool(is_stattrak),
-                    strict_name_match=True,
-                    allow_refresh=False,
-                )
-            if not price_info:
-                price_info = self._cached_get_price_with_float(
-                    skin.name,
-                    target_wear=None,
-                    max_float=None,
-                    exclude_stattrak=not is_stattrak,
-                    require_stattrak=bool(is_stattrak),
-                    strict_name_match=False,
-                    allow_refresh=False,
-                    )
-            if not price_info:
+                continue
+            if not self._filter_skin_by_float(price_info, max_float=max_float):
                 continue
             price, skin_float, wear = price_info
-            if self._strict_input_float and skin_float is None:
-                continue
-            if skin_float is None and max_float is not None and float(max_float) < 0.999:
-                allowed_wears = ["Factory New", "Minimal Wear"]
-                if float(max_float) >= 0.38:
-                    allowed_wears.append("Field-Tested")
-                if wear not in allowed_wears:
-                    continue
-            if max_float is not None and skin_float is not None and float(skin_float) > float(max_float):
-                continue
-            if self._strict_input_float and skin_float is None:
-                continue
             if price and price > 0:
-                priced_skins.append({
-                    'name': skin.name,
-                    'collection': collection,
-                    'price': price,
-                    'float': skin_float,
-                    'wear': wear,
-                    'rarity': self._normalize_rarity(skin.rarity)
-                })
+                priced_skins.append(
+                    self._build_skin_entry(
+                        skin.name, collection, price_info,
+                        self._normalize_rarity(skin.rarity),
+                    )
+                )
 
         priced_skins.sort(key=lambda x: x['price'])
         result = priced_skins[:count]
-        with self._memo_lock:
+        with self._lock_main_skins:
             self._memo_main_skins[memo_key] = list(result)
         return result
 
@@ -4414,78 +4381,35 @@ class ContractCalculator:
                 if self._normalize_rarity(skin.rarity) != rarity:
                     continue
 
-                price_info = None
-                if max_float_threshold is not None and float(max_float_threshold) < 0.999:
-                    # Сначала пытаемся найти лот, который реально проходит по float.
-                    price_info = self._cached_get_price_with_float(
-                        skin.name,
-                        max_float=max_float_threshold,
-                        exclude_stattrak=not is_stattrak,
-                        require_stattrak=bool(is_stattrak),
-                        strict_name_match=True,
-                        allow_refresh=False,
-                    )
-                    if not price_info:
-                        price_info = self._cached_get_price_with_float(
-                            skin.name,
-                            max_float=max_float_threshold,
-                            exclude_stattrak=not is_stattrak,
-                            require_stattrak=bool(is_stattrak),
-                            strict_name_match=False,
-                            allow_refresh=False,
-                        )
-                if not price_info:
-                    price_info = self._cached_get_price_with_float(
-                        skin.name,
-                        target_wear=None,
-                        max_float=None,
-                        exclude_stattrak=not is_stattrak,
-                        require_stattrak=bool(is_stattrak),
-                        strict_name_match=True,
-                        allow_refresh=False,
-                    )
-                if not price_info:
-                    price_info = self._cached_get_price_with_float(
-                        skin.name,
-                        target_wear=None,
-                        max_float=None,
-                        exclude_stattrak=not is_stattrak,
-                        require_stattrak=bool(is_stattrak),
-                        strict_name_match=False,
-                        allow_refresh=False,
-                    )
+                price_info = self._get_skin_price_info(
+                    skin.name,
+                    max_float=max_float_threshold if (max_float_threshold is not None and float(max_float_threshold) < 0.999) else None,
+                    exclude_stattrak=not is_stattrak,
+                    require_stattrak=bool(is_stattrak),
+                    strict_name_match=True,
+                    allow_refresh=False,
+                )
                 if not price_info:
                     continue
+                if not self._filter_skin_by_float(price_info, max_float=max_float_threshold):
+                    continue
+
                 price, skin_float, wear = price_info
-                if self._strict_input_float and skin_float is None:
-                    continue
-                if skin_float is None and max_float_threshold is not None and float(max_float_threshold) < 0.999:
-                    allowed_wears = ["Factory New", "Minimal Wear"]
-                    if float(max_float_threshold) >= 0.38:
-                        allowed_wears.append("Field-Tested")
-                    if wear not in allowed_wears:
-                        continue
                 if max_price is not None and price is not None and float(price) > float(max_price):
-                    continue
-                if max_float_threshold is not None and skin_float is not None and float(skin_float) > float(max_float_threshold):
-                    continue
-                if self._strict_input_float and skin_float is None:
                     continue
 
                 outcomes_count = self._get_next_grade_skins_count(filler_collection, rarity, is_stattrak)
                 if outcomes_count <= 0:
                     continue
 
-                candidate_skins.append({
-                    'name': skin.name,
-                    'collection': filler_collection,
-                    'price': float(price),
-                    'float': float(skin_float) if skin_float is not None else None,
-                    'wear': wear,
-                    'rarity': self._normalize_rarity(skin.rarity),
-                    'outcomes_count': int(outcomes_count),
-                    'efficiency': 0.0,
-                })
+                candidate_skins.append(
+                    self._build_skin_entry(
+                        skin.name, filler_collection, price_info,
+                        self._normalize_rarity(skin.rarity),
+                        outcomes_count=outcomes_count,
+                        efficiency=0.0,
+                    )
+                )
 
             # Филлеры должны быть дешёвыми, а float низким. Приоритет — цена, затем float.
             candidate_skins.sort(key=lambda x: (x.get('price', 1e9), x.get('float', 1.0)))
@@ -4512,7 +4436,7 @@ class ContractCalculator:
         }
         return rarity_map.get(input_rarity)
     
-    def _get_smart_fillers(self, rarity: str, count: int, exclude_collection: str, 
+    def _get_smart_fillers(self, rarity: str, count: int, exclude_collection: str,
                          is_stattrak: bool, target_float_threshold: float = 0.20,
                          max_price: Optional[float] = None) -> List[Dict]:
         """Получение умных филлеров с учетом float"""
@@ -4529,8 +4453,8 @@ class ContractCalculator:
             if skin.collection == exclude_collection:
                 continue
             
-            # Получаем цену и float
-            price_info = self._cached_get_price_with_float(
+            # Получаем цену и float через единый метод
+            price_info = self._get_skin_price_info(
                 skin.name,
                 max_float=None,
                 exclude_stattrak=not is_stattrak,
@@ -4547,17 +4471,14 @@ class ContractCalculator:
                     outcomes_count = self._get_next_grade_skins_count(skin.collection, rarity, is_stattrak)
                     if outcomes_count <= 0:
                         continue
-                    efficiency = 0.0
-                    candidate_skins.append({
-                        'name': skin.name,
-                        'collection': skin.collection,
-                        'price': price,
-                        'float': skin_float,
-                        'wear': wear,
-                        'rarity': self._normalize_rarity(skin.rarity),
-                        'outcomes_count': outcomes_count,
-                        'efficiency': efficiency
-                    })
+                    candidate_skins.append(
+                        self._build_skin_entry(
+                            skin.name, skin.collection, price_info,
+                            self._normalize_rarity(skin.rarity),
+                            outcomes_count=outcomes_count,
+                            efficiency=0.0,
+                        )
+                    )
         
         # Сортируем:
         # 1) минимум outcomes (меньше "размывает" шанс)
@@ -4610,7 +4531,7 @@ class ContractCalculator:
             return 0
 
         memo_key = (collection, input_rarity, next_rarity, bool(is_stattrak))
-        with self._memo_lock:
+        with self._lock_next_grade:
             cached = self._memo_next_grade_count.get(memo_key)
         if cached is not None:
             return int(cached)
@@ -4622,7 +4543,7 @@ class ContractCalculator:
                 continue
             count += 1
 
-        with self._memo_lock:
+        with self._lock_next_grade:
             self._memo_next_grade_count[memo_key] = int(count)
         return int(count)
     
@@ -4760,7 +4681,7 @@ class ContractCalculator:
                 continue
 
             # Находим min/max float среди всех возможных выходных скинов из этой коллекции
-            output_skins = self._get_possible_outputs(collection, input_rarity, target_wear='Factory New', is_stattrak=is_stattrak)
+            output_skins = self._get_possible_outputs(collection, input_rarity, average_float=None, is_stattrak=is_stattrak)
             if not output_skins:
                 continue
 
@@ -4860,7 +4781,7 @@ class ContractCalculator:
 
         output_items_by_collection: Dict[str, List[Dict]] = {}
         for collection_name, skins_count in collections_count.items():
-            output_items = self._get_possible_outputs(collection_name, input_rarity, target_wear='Factory New', is_stattrak=is_stattrak)
+            output_items = self._get_possible_outputs(collection_name, input_rarity, average_float=avg_float, is_stattrak=is_stattrak)
             if not output_items:
                 continue
             output_items_by_collection[collection_name] = output_items
@@ -5044,15 +4965,31 @@ class ContractCalculator:
             'best_outcome_probability': float(best_outcome_probability) if best_outcome_probability else 0.0,
         }
     
-    def _get_possible_outputs(self, collection: str, input_rarity: str, target_wear: str, is_stattrak: bool) -> List[Dict]:
-        """Получение возможных выходных скинов для конкретной коллекции и входного грейда."""
+    _WEAR_RANGES: Dict[str, Tuple[float, float]] = {
+        'Factory New': (0.0, 0.07),
+        'Minimal Wear': (0.07, 0.15),
+        'Field-Tested': (0.15, 0.38),
+        'Well-Worn': (0.38, 0.45),
+        'Battle-Scarred': (0.45, 1.0),
+    }
+
+    def _get_possible_outputs(self, collection: str, input_rarity: str, average_float: Optional[float], is_stattrak: bool) -> List[Dict]:
+        """Получение возможных выходных скинов для конкретной коллекции и входного грейда.
+
+        Если average_float задан, определяется лучшее достижимое качество через
+        _determine_best_achievable_wear и скины фильтруются: остаются только те,
+        чей диапазон [min_float, max_float] пересекается с диапазоном этого качества.
+        Если average_float is None — возвращаются все скины следующего грейда.
+        """
         input_rarity = self._normalize_rarity(input_rarity)
         next_rarity = self._get_next_rarity(input_rarity)
         if not next_rarity:
             return []
 
-        memo_key = (collection, input_rarity, next_rarity, bool(is_stattrak))
-        with self._memo_lock:
+        target_wear = self._determine_best_achievable_wear(float(average_float)) if average_float is not None else None
+
+        memo_key = (collection, input_rarity, next_rarity, bool(is_stattrak), target_wear)
+        with self._lock_next_grade:
             cached = self._memo_possible_outputs.get(memo_key)
         if cached is not None:
             return list(cached)
@@ -5064,12 +5001,22 @@ class ContractCalculator:
             if self._normalize_rarity(skin.rarity) != next_rarity:
                 continue
 
+            if target_wear is not None:
+                wear_lo, wear_hi = self._WEAR_RANGES.get(target_wear, (0.0, 1.0))
+                try:
+                    smin = float(skin.min_float)
+                    smax = float(skin.max_float)
+                except Exception:
+                    smin, smax = 0.0, 1.0
+                if smin > wear_hi + 1e-12 or smax < wear_lo - 1e-12:
+                    continue
+
             possible_outputs.append({
                 'name': skin.name,
                 'rarity': skin.rarity
             })
 
-        with self._memo_lock:
+        with self._lock_next_grade:
             self._memo_possible_outputs[memo_key] = list(possible_outputs)
         return possible_outputs
     
