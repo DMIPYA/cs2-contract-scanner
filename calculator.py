@@ -4583,8 +4583,12 @@ class ContractCalculator(_PriceLookupMixin):
         for skin in contract_skins:
             skin_float = skin.get('float', None)
             if skin_float is None:
-                continue
-            total_float += skin_float
+                estimated = self._estimate_float_from_wear(skin.get('wear'))
+                if estimated is not None:
+                    skin_float = estimated
+                else:
+                    continue
+            total_float += float(skin_float)
             valid_skins += 1
         
         return total_float / valid_skins if valid_skins > 0 else 0.0
@@ -4599,7 +4603,11 @@ class ContractCalculator(_PriceLookupMixin):
         for skin in contract_skins:
             skin_float = skin.get('float', None)
             if skin_float is None:
-                continue
+                estimated = self._estimate_float_from_wear(skin.get('wear'))
+                if estimated is not None:
+                    skin_float = estimated
+                else:
+                    continue
 
             skin_data = self.database.get_skin_by_name(skin.get('name', ''))
             if not skin_data:
@@ -4690,7 +4698,11 @@ class ContractCalculator(_PriceLookupMixin):
         for skin in contract_skins:
             skin_float = skin.get('float', None)
             if skin_float is None:
-                continue
+                estimated = self._estimate_float_from_wear(skin.get('wear'))
+                if estimated is not None:
+                    skin_float = estimated
+                else:
+                    continue
 
             collection = skin.get('collection', '')
             if not collection:
