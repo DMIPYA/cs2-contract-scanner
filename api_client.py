@@ -3,7 +3,7 @@ import time
 
 # Версия кэша для инвалидации при изменении алгоритма расчёта wear
 # Увеличивать при каждом изменении логики расчёта float/wear
-MARKET_CACHE_VERSION = 3
+MARKET_CACHE_VERSION = 4
 import json
 import gzip
 import pickle
@@ -1019,27 +1019,56 @@ class MarketCSGOClient:
         else:
             return "Unknown"
 
-    def _determine_wear_from_float(self, item_float: float) -> str:
-        """Определяет качество по float (если quality нет в названии full-export).
+    def _determine_wear_from_float(
+        self, 
+        item_float: float, 
+        available_wears: Optional[List[str]] = None
+    ) -> str:
+        """
+        Определяет качество по float с учётом доступных wear для скина.
         
         CS2 wear ranges (inclusive upper bound):
         FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
+        
+        Args:
+            item_float: Float value (0.0-1.0)
+            available_wears: List of available wear levels for this skin.
+                            If None, uses standard thresholds.
+        
+        Returns:
+            Wear level string
         """
         try:
             f = float(item_float)
         except Exception:
             return "Unknown"
 
-        # Используем <= для верхней границы (включительно)
         if f <= 0.07:
-            return "Factory New"
-        if f <= 0.15:
-            return "Minimal Wear"
-        if f <= 0.38:
-            return "Field-Tested"
-        if f <= 0.45:
-            return "Well-Worn"
-        return "Battle-Scarred"
+            ideal_wear = "Factory New"
+        elif f <= 0.15:
+            ideal_wear = "Minimal Wear"
+        elif f <= 0.38:
+            ideal_wear = "Field-Tested"
+        elif f <= 0.45:
+            ideal_wear = "Well-Worn"
+        else:
+            ideal_wear = "Battle-Scarred"
+        
+        if not available_wears:
+            return ideal_wear
+        
+        wear_order = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
+        
+        try:
+            ideal_idx = wear_order.index(ideal_wear)
+        except ValueError:
+            return available_wears[-1] if available_wears else "Unknown"
+        
+        for i in range(ideal_idx, len(wear_order)):
+            if wear_order[i] in available_wears:
+                return wear_order[i]
+        
+        return available_wears[-1] if available_wears else ideal_wear
     
     def get_price(
         self,

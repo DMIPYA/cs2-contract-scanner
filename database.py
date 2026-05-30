@@ -270,6 +270,37 @@ class CS2Database:
             return (skin.min_float, skin.max_float)
         return None
     
+    def get_available_wears(self, skin_name: str) -> List[str]:
+        """
+        Get available wear levels for a skin.
+        
+        Args:
+            skin_name: Exact skin name (e.g., "MAC-10 | Sakkaku")
+            
+        Returns:
+            List of available wear levels. Empty list if skin not found.
+        """
+        skin = self.get_skin_by_name(skin_name)
+        if not skin:
+            return []
+        
+        if skin.wears:
+            return skin.wears
+        
+        available = []
+        if skin.min_float < 0.07:
+            available.append('Factory New')
+        if skin.min_float < 0.15 and skin.max_float >= 0.07:
+            available.append('Minimal Wear')
+        if skin.min_float < 0.38 and skin.max_float >= 0.15:
+            available.append('Field-Tested')
+        if skin.min_float < 0.45 and skin.max_float >= 0.38:
+            available.append('Well-Worn')
+        if skin.max_float >= 0.45:
+            available.append('Battle-Scarred')
+        
+        return available if available else ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
+    
     def calculate_max_average_float_for_fn(self, target_skin_name: str) -> float:
         """
         Рассчитать максимальный средний float для получения Factory New на основе реальных данных

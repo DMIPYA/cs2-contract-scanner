@@ -103,6 +103,9 @@ class TargetHuntingService:
             raise RuntimeError('Failed to initialize price manager')
         logger.info('Price manager initialized in %.1fs', time.time() - pm_start)
         self.calculator = ContractCalculator(self.database, self.price_manager)
+        if hasattr(self.calculator, 'clear_outcomes_cache'):
+            self.calculator.clear_outcomes_cache()
+            logger.info('Calculator outcomes cache cleared on startup')
         logger.info('Initialized TargetHuntingService OK')
         self.start_refresher()
 

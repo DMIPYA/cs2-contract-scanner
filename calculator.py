@@ -139,6 +139,14 @@ class ContractCalculator(_PriceLookupMixin):
         self._memo_listings: Dict[Tuple, List[Tuple[float, Optional[float], str]]] = {}
         self._memo_effective_sell_price: Dict[Tuple, Optional[float]] = {}
 
+    def clear_outcomes_cache(self):
+        """Clear all cached outcomes data (wear labels may be stale)."""
+        with self._lock_contract_eval:
+            self._memo_contract_eval.clear()
+            self._memo_contract_target_prob.clear()
+            self._memo_contract_max_output.clear()
+        self._logger.info('Outcomes cache cleared (wear calculation fix)')
+
     def get_last_target_suite_diagnostics(self) -> Optional[Dict]:
         return self._last_target_suite_diagnostics
 
@@ -4757,30 +4765,56 @@ class ContractCalculator(_PriceLookupMixin):
         else:
             return 'Battle-Scarred'
 
-    def _determine_wear_from_float(self, item_float: float) -> str:
-        """Определяет качество (wear) по значению float.
-
-        CS2 wear ranges:
-        - Factory New: 0.00 - 0.07
-        - Minimal Wear: 0.07 - 0.15
-        - Field-Tested: 0.15 - 0.38
-        - Well-Worn: 0.38 - 0.45
-        - Battle-Scarred: 0.45 - 1.00
+    def _determine_wear_from_float(
+        self, 
+        item_float: float, 
+        available_wears: Optional[List[str]] = None
+    ) -> str:
         """
-        f = float(item_float)
+        Определяет качество (wear) по значению float с учётом доступных wear для скина.
 
-        # CS2 wear ranges (inclusive upper bound):
-        # FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
+        CS2 wear ranges (inclusive upper bound):
+        FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
+
+        Args:
+            item_float: Float value (0.0-1.0)
+            available_wears: List of available wear levels for this skin.
+                            If None, uses standard thresholds.
+
+        Returns:
+            Wear level string
+        """
+        try:
+            f = float(item_float)
+        except Exception:
+            return "Unknown"
+
         if f <= 0.07:
-            return 'Factory New'
+            ideal_wear = 'Factory New'
         elif f <= 0.15:
-            return 'Minimal Wear'
+            ideal_wear = 'Minimal Wear'
         elif f <= 0.38:
-            return 'Field-Tested'
+            ideal_wear = 'Field-Tested'
         elif f <= 0.45:
-            return 'Well-Worn'
+            ideal_wear = 'Well-Worn'
         else:
-            return 'Battle-Scarred'
+            ideal_wear = 'Battle-Scarred'
+
+        if not available_wears:
+            return ideal_wear
+
+        wear_order = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
+
+        try:
+            ideal_idx = wear_order.index(ideal_wear)
+        except ValueError:
+            return available_wears[-1] if available_wears else "Unknown"
+
+        for i in range(ideal_idx, len(wear_order)):
+            if wear_order[i] in available_wears:
+                return wear_order[i]
+
+        return available_wears[-1] if available_wears else ideal_wear
 
     def calculate_contract_outcomes_details(self, contract_skins: List[Dict], is_stattrak: bool) -> List[Dict]:
         # skinsearch algorithm: f' = average of per-skin normalized floats (own range),
@@ -4842,22 +4876,17 @@ class ContractCalculator(_PriceLookupMixin):
                     min_f, max_f = 0.0, 1.0
 
                 out_float = float(avg_norm) * (max_f - min_f) + min_f
-                wear = self._determine_wear_from_float(out_float)
-
-                # Ensure the computed wear exists for this skin. If not, degrade to the nearest worse available wear.
-                if wears_avail and wear not in wears_avail:
-                    wear_order = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
-                    try:
-                        start_i = wear_order.index(wear)
-                    except Exception:
-                        start_i = 0
-                    chosen = None
-                    for j in range(start_i, len(wear_order)):
-                        if wear_order[j] in wears_avail:
-                            chosen = wear_order[j]
-                            break
-                    if chosen is not None:
-                        wear = chosen
+                
+                available_wears_for_skin = wears_avail if wears_avail else None
+                wear = self._determine_wear_from_float(out_float, available_wears=available_wears_for_skin)
+                
+                if available_wears_for_skin:
+                    ideal_wear = self._determine_wear_from_float(out_float, available_wears=None)
+                    if ideal_wear != wear:
+                        self._logger.info(
+                            'WearDegradation: skin=%s ideal=%s actual=%s float=%.4f available=%s',
+                            skin_name, ideal_wear, wear, out_float, available_wears_for_skin
+                        )
 
                 # Liquidity-aware pricing: use effective sell price to avoid paper-profit on illiquid skins.
                 price = self._cached_get_effective_sell_price(
