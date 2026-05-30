@@ -4825,6 +4825,10 @@ class ContractCalculator(_PriceLookupMixin):
         if avg_norm > 1.0:
             avg_norm = 1.0
         
+        self._logger.debug('ContractCalc: avg_norm=%.4f inputs=%d', avg_norm, len(contract_skins))
+        for i, s in enumerate(contract_skins[:3]):
+            self._logger.debug('  input[%d]: name=%s float=%s wear=%s', i, s.get('name'), s.get('float'), s.get('wear'))
+        
         input_rarity = contract_skins[0].get('rarity') if contract_skins else None
         if not input_rarity:
             return []
@@ -4879,6 +4883,11 @@ class ContractCalculator(_PriceLookupMixin):
                 
                 available_wears_for_skin = wears_avail if wears_avail else None
                 wear = self._determine_wear_from_float(out_float, available_wears=available_wears_for_skin)
+                
+                self._logger.debug(
+                    'WearCalc: skin=%s avg_norm=%.4f out_float=%.4f min=%.2f max=%.2f wears=%s result_wear=%s',
+                    skin_name, avg_norm, out_float, min_f, max_f, available_wears_for_skin, wear
+                )
                 
                 if available_wears_for_skin:
                     ideal_wear = self._determine_wear_from_float(out_float, available_wears=None)
