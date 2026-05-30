@@ -3,7 +3,7 @@ import time
 
 # Версия кэша для инвалидации при изменении алгоритма расчёта wear
 # Увеличивать при каждом изменении логики расчёта float/wear
-MARKET_CACHE_VERSION = 2
+MARKET_CACHE_VERSION = 3
 import json
 import gzip
 import pickle

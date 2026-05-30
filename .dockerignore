@@ -1,0 +1,15 @@
+.git/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.hypothesis/
+.env
+.vscode/
+webapp/index_mock.html
+webapp/gen_mock.py
+_test_*.py
+_patch_*.py
+OPTIMIZATION_PLAN.md
+market_prices_cache.pkl.gz
+telegram_bot.log

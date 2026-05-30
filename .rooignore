@@ -1,0 +1,16 @@
+__pycache__/
+.pytest_cache/
+.kilo/
+.kiro/
+.dockerignore - .gitignore
+.gitignore
+.git/
+.vscode/
+.hypothesis/
+telegram_bot.log
+skins.json
+collection.json
+full_export_index_cache.json
+collection_cache.json
+market_prices_cache.gz
+fix-wear-mismatch.md
