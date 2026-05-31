@@ -4825,11 +4825,12 @@ class ContractCalculator(_PriceLookupMixin):
         if avg_norm > 1.0:
             avg_norm = 1.0
         
-        if 'Wasteland Princess' in str([s.get('name') for s in contract_skins[:3]]):
+        skin_names = [s.get('name', '') for s in contract_skins[:3]]
+        if any("Sobek" in str(n) or "Apep" in str(n) or "Waters" in str(n) for n in skin_names):
             self._logger.info(
-                'WASTELAND_DEBUG: avg_norm=%.4f inputs=%d floats=%s',
+                'CONTRACT_DEBUG: avg_norm=%.4f inputs=%d floats=%s',
                 avg_norm, len(contract_skins),
-                [s.get('float') for s in contract_skins]
+                [round(s.get('float', 0), 4) for s in contract_skins]
             )
         
         input_rarity = contract_skins[0].get('rarity') if contract_skins else None
@@ -4886,12 +4887,6 @@ class ContractCalculator(_PriceLookupMixin):
                 
                 available_wears_for_skin = wears_avail if wears_avail else None
                 wear = self._determine_wear_from_float(out_float, available_wears=available_wears_for_skin)
-                
-                if 'Buzz Kill' in skin_name or 'Dragonfire' in skin_name:
-                    self._logger.info(
-                        'WEAR_FIX_DEBUG: skin=%s avg_norm=%.4f out_float=%.4f wears=%s -> wear=%s',
-                        skin_name, avg_norm, out_float, available_wears_for_skin, wear
-                    )
                 
                 if available_wears_for_skin:
                     ideal_wear = self._determine_wear_from_float(out_float, available_wears=None)
