@@ -4825,9 +4825,12 @@ class ContractCalculator(_PriceLookupMixin):
         if avg_norm > 1.0:
             avg_norm = 1.0
         
-        self._logger.debug('ContractCalc: avg_norm=%.4f inputs=%d', avg_norm, len(contract_skins))
-        for i, s in enumerate(contract_skins[:3]):
-            self._logger.debug('  input[%d]: name=%s float=%s wear=%s', i, s.get('name'), s.get('float'), s.get('wear'))
+        if 'Wasteland Princess' in str([s.get('name') for s in contract_skins[:3]]):
+            self._logger.info(
+                'WASTELAND_DEBUG: avg_norm=%.4f inputs=%d floats=%s',
+                avg_norm, len(contract_skins),
+                [s.get('float') for s in contract_skins]
+            )
         
         input_rarity = contract_skins[0].get('rarity') if contract_skins else None
         if not input_rarity:
