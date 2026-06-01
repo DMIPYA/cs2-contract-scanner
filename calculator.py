@@ -4880,13 +4880,6 @@ class ContractCalculator(_PriceLookupMixin):
                 available_wears_for_skin = wears_avail if wears_avail else None
                 wear = self._determine_wear_from_float(out_float, available_wears=available_wears_for_skin)
                 
-                ideal_wear = self._determine_wear_from_float(out_float, available_wears=None)
-                if ideal_wear != wear:
-                    self._logger.info(
-                        'WearMismatch: skin=%s out_float=%.4f ideal=%s actual=%s available=%s',
-                        skin_name, out_float, ideal_wear, wear, available_wears_for_skin
-                    )
-                
                 if available_wears_for_skin:
                     ideal_wear = self._determine_wear_from_float(out_float, available_wears=None)
                     if ideal_wear != wear:

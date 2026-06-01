@@ -801,6 +801,11 @@ def _render_details(*, svc: TargetHuntingService, mode: str, max_inv: Optional[f
         lines.append("<b>Outcomes</b>")
         for o in outs:
             nm = str(o.get('name') or '')
+            out_float = float(o.get('out_float') or 0.0)
+            wr = str(o.get('wear') or '')
+            logging.info('OUTCOME_DEBUG: skin=%s out_float=%.4f wear=%s', nm, out_float, wr)
+        for o in outs:
+            nm = str(o.get('name') or '')
             pr = float(o.get('price') or 0.0)
             pb = float(o.get('probability') or 0.0) * 100.0
             wr = str(o.get('wear') or '')
