@@ -566,6 +566,23 @@ class TargetHuntingService:
                 updated.sort(key=_sort_key, reverse=True)
                 updated = updated[: int(max_results)]
 
+            for idx, r in enumerate(updated, start=1):
+                ins = list((r or {}).get('input_skins') or [])
+                target = str(r.get('hunt_output') or '')
+                col = str(r.get('target_collection') or '')
+                is_st = 'ST' if bool(r.get('is_stattrak')) else 'NO'
+                skin_infos = []
+                for s in ins:
+                    nm = str(s.get('name') or '')
+                    fl = s.get('float')
+                    wr = str(s.get('wear') or '')
+                    if nm:
+                        fl_str = f"{float(fl):.4f}" if fl is not None else 'N/A'
+                        wr_str = wr if wr else 'N/A'
+                        skin_infos.append(f"{nm}|f={fl_str}|w={wr_str}")
+                if skin_infos:
+                    logger.info('CONTRACT_SKINS: #%d %s %s -> %s | %s', idx, is_st, col, target, ' | '.join(skin_infos))
+
             try:
                 warm_n = int(os.getenv('OUTCOMES_WARMUP_TOPN') or 30)
             except Exception:
