@@ -165,6 +165,7 @@ def _serialize_contract_summary(idx: int, c: dict) -> dict:
         'expected_wear': str(c.get('hunt_expected_wear') or ''),
         'target_wear': str(c.get('hunt_target_wear') or ''),
         'max_avg_float': round(float(c.get('target_max_avg_float') or 0.0), 4) if c.get('target_max_avg_float') else None,
+        'outcomes': list(c.get('outcomes') or []),
     }
 
 
@@ -172,85 +173,49 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
     """Full detail for the detail screen."""
     summary = _serialize_contract_summary(idx, c)
 
-    # Resolve service and price manager once for the whole function
     _svc_inst = _get_svc()
     _pm = getattr(_svc_inst, 'price_manager', None)
+    _calc = getattr(_svc_inst, 'calculator', None)
 
     ins = list(c.get('input_skins') or [])
     
-    # Calculate max allowed average float for inputs based on target wear
-    # This shows the maximum average float that keeps the target skin quality
     max_allowed_avg_float = None
     max_allowed_wear = None
     
     target_wear = c.get('hunt_target_wear') or c.get('expected_wear')
-    target_skin_name = c.get('hunt_output') or c.get('name')
+    outcomes_raw = list(c.get('outcomes') or [])
     
-    db = _get_db()
-    if target_wear and target_skin_name and db:
-        # Wear boundaries (upper limit for each quality, exclusive)
-        # FN: [0.00, 0.07), MW: [0.07, 0.15), FT: [0.15, 0.38), WW: [0.38, 0.45), BS: [0.45, 1.00]
-        wear_upper_limits = {
-            'Factory New': 0.07,
-            'Minimal Wear': 0.15,
-            'Field-Tested': 0.38,
-            'Well-Worn': 0.45,
-            'Battle-Scarred': 1.00,
-        }
+    if _calc and target_wear and outcomes_raw:
+        outcomes_for_threshold = outcomes_raw
+        max_avg_norm = _calc.calculate_max_avg_float_for_outcomes(outcomes_for_threshold, str(target_wear))
         
-        # Get the upper boundary for target wear (exclusive, so we use slightly less)
-        target_boundary = wear_upper_limits.get(target_wear, 0.07)
-        # Use a small epsilon to ensure we stay below the boundary
-        if target_wear != 'Battle-Scarred':
-            target_boundary = target_boundary - 0.0001
-        
-        # Get target skin data to understand its float range
-        target_skin = db.get_skin_by_name(target_skin_name)
-        if target_skin:
-            target_min = float(target_skin.min_float)
-            target_max = float(target_skin.max_float)
-            
-            # Clamp target_boundary to skin's actual range
-            target_boundary = min(target_boundary, target_max)
-            target_boundary = max(target_boundary, target_min)
-            
-            # The output float formula: out_float = avg_norm * (target_max - target_min) + target_min
-            # We need: out_float < target_boundary (strictly less for non-BS)
-            # So: avg_norm * (target_max - target_min) + target_min < target_boundary
-            # avg_norm < (target_boundary - target_min) / (target_max - target_min)
-            
-            if target_max > target_min:
-                max_avg_norm = (target_boundary - target_min) / (target_max - target_min)
-                max_avg_norm = min(1.0, max(0.0, max_avg_norm))
+        if max_avg_norm is not None:
+            db = _get_db()
+            if ins and db:
+                denorm_floats = []
+                for s in ins:
+                    skin_name = s.get('name', '')
+                    if skin_name:
+                        skin_data = db.get_skin_by_name(skin_name)
+                        if skin_data:
+                            min_f = float(skin_data.min_float)
+                            max_f = float(skin_data.max_float)
+                            denorm_float = max(min_f, min(max_f, max_avg_norm))
+                            denorm_floats.append(denorm_float)
                 
-                # Now denormalize this for input skins to get real float values
-                if ins:
-                    denorm_floats = []
-                    for s in ins:
-                        skin_name = s.get('name', '')
-                        if skin_name:
-                            skin_data = db.get_skin_by_name(skin_name)
-                            if skin_data:
-                                min_f = float(skin_data.min_float)
-                                max_f = float(skin_data.max_float)
-                                # Denormalize: real_float = norm * (max - min) + min
-                                denorm_float = max(min_f, min(max_f, max_avg_norm))
-                                denorm_floats.append(denorm_float)
-                    
-                    if denorm_floats:
-                        max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
+                if denorm_floats:
+                    max_allowed_avg_float = round(sum(denorm_floats) / len(denorm_floats), 4)
 
-                        # Determine wear quality based on max allowed float
-                        if max_allowed_avg_float < 0.07:
-                            max_allowed_wear = 'Factory New'
-                        elif max_allowed_avg_float < 0.15:
-                            max_allowed_wear = 'Minimal Wear'
-                        elif max_allowed_avg_float < 0.38:
-                            max_allowed_wear = 'Field-Tested'
-                        elif max_allowed_avg_float < 0.45:
-                            max_allowed_wear = 'Well-Worn'
-                        else:
-                            max_allowed_wear = 'Battle-Scarred'
+                    if max_allowed_avg_float < 0.07:
+                        max_allowed_wear = 'Factory New'
+                    elif max_allowed_avg_float < 0.15:
+                        max_allowed_wear = 'Minimal Wear'
+                    elif max_allowed_avg_float < 0.38:
+                        max_allowed_wear = 'Field-Tested'
+                    elif max_allowed_avg_float < 0.45:
+                        max_allowed_wear = 'Well-Worn'
+                    else:
+                        max_allowed_wear = 'Battle-Scarred'
 
     # Group inputs by (name, wear, buy_source, collection)
     # Skins with same name/wear/source are merged regardless of individual float values.

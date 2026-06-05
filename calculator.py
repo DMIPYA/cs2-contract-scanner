@@ -140,12 +140,14 @@ class ContractCalculator(_PriceLookupMixin):
         self._memo_effective_sell_price: Dict[Tuple, Optional[float]] = {}
 
     def clear_outcomes_cache(self):
-        """Clear all cached outcomes data (wear labels may be stale)."""
+        """Clear all cached outcomes data (wear labels and max_float may be stale)."""
         with self._lock_contract_eval:
             self._memo_contract_eval.clear()
             self._memo_contract_target_prob.clear()
             self._memo_contract_max_output.clear()
-        self._logger.info('Outcomes cache cleared (wear calculation fix)')
+            self._memo_target_rank.clear()
+            self._memo_contract_craftability.clear()
+        self._logger.info('Outcomes cache cleared (max_float calculation fix)')
 
     def get_last_target_suite_diagnostics(self) -> Optional[Dict]:
         return self._last_target_suite_diagnostics
@@ -170,6 +172,130 @@ class ContractCalculator(_PriceLookupMixin):
         if w == 'Well-Worn':
             return 0.45
         return 1.0
+
+    def calculate_max_avg_float_for_outcomes(
+        self,
+        outcomes: List[Dict],
+        target_wear: str,
+    ) -> Optional[float]:
+        """
+        Вычисляет максимально допустимый средний нормализованный float входа,
+        при котором НИ ОДИН outcome не ухудшает wear относительно target_wear.
+        
+        Args:
+            outcomes: список исходов от calculate_contract_outcomes_details
+            target_wear: целевой wear (например, 'Factory New', 'Minimal Wear')
+        
+        Returns:
+            Максимально допустимый avg_norm (0.0-1.0) или None если гарантия невозможна
+        
+        Логика:
+        1. Для каждого outcome определяем максимально допустимый out_float
+        2. Переводим это в ограничение на avg_norm для данного outcome
+        3. Берём минимум по всем outcomes (самый строгий)
+        """
+        if not outcomes:
+            return None
+        
+        wear_order = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
+        wear_thresholds = {
+            'Factory New': 0.07,
+            'Minimal Wear': 0.15,
+            'Field-Tested': 0.38,
+            'Well-Worn': 0.45,
+            'Battle-Scarred': 1.0,
+        }
+        
+        try:
+            target_idx = wear_order.index(str(target_wear))
+        except ValueError:
+            target_idx = 0
+        
+        min_threshold_global = 1.0
+        any_valid_outcome = False
+        
+        for o in outcomes:
+            skin_name = str(o.get('name') or '')
+            min_f = float(o.get('min_float') or 0.0)
+            max_f = float(o.get('max_float') or 1.0)
+            
+            if max_f <= min_f + 1e-9:
+                continue
+            
+            skin_data = self.database.get_skin_by_name(skin_name)
+            if not skin_data:
+                continue
+            
+            try:
+                raw_wears = list(getattr(skin_data, 'wears', None) or [])
+                wears_avail = [w.get('name') if isinstance(w, dict) and 'name' in w else str(w) for w in raw_wears]
+            except Exception:
+                wears_avail = []
+            
+            if not wears_avail:
+                wears_avail = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
+            
+            allowed_idxs = [i for i in range(0, target_idx + 1) if wear_order[i] in wears_avail]
+            
+            if not allowed_idxs:
+                continue
+            
+            max_allowed_idx = max(allowed_idxs)
+            max_allowed_wear = wear_order[max_allowed_idx]
+            
+            if max_allowed_wear == 'Battle-Scarred':
+                max_out_float_ok = float(max_f)
+            else:
+                max_out_float_ok = float(wear_thresholds.get(max_allowed_wear, 1.0))
+            
+            denom = max_f - min_f
+            if denom <= 1e-9:
+                continue
+            
+            max_avg_norm_for_outcome = (max_out_float_ok - min_f) / denom
+            
+            max_avg_norm_for_outcome = max(0.0, min(1.0, max_avg_norm_for_outcome))
+            
+            if max_avg_norm_for_outcome < min_threshold_global:
+                min_threshold_global = max_avg_norm_for_outcome
+            
+            any_valid_outcome = True
+        
+        if not any_valid_outcome:
+            return None
+        
+        safety_margin = 0.998
+        return max(0.0, min_threshold_global * safety_margin)
+
+    def calculate_expected_wear_from_outcomes(self, outcomes: List[Dict]) -> Optional[str]:
+        """
+        Вычисляет ожидаемый (worst-case) wear из списка outcomes.
+        
+        Возвращает самый плохой wear среди всех outcomes,
+        т.к. это гарантированный минимум качества при контракте.
+        
+        Args:
+            outcomes: список исходов от calculate_contract_outcomes_details
+        
+        Returns:
+            Wear строка или None если outcomes пуст
+        """
+        if not outcomes:
+            return None
+        
+        wear_order = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
+        worst_idx = 0
+        
+        for o in outcomes:
+            w = str(o.get('wear') or '')
+            try:
+                idx = wear_order.index(w)
+            except ValueError:
+                idx = len(wear_order) - 1
+            if idx > worst_idx:
+                worst_idx = idx
+        
+        return wear_order[worst_idx]
 
     def _avg_outcome_price_for_collection(
         self,
@@ -1611,6 +1737,14 @@ class ContractCalculator(_PriceLookupMixin):
                                 rarity_stats['contracts_jackpot_ok'] = int(rarity_stats.get('contracts_jackpot_ok') or 0) + 1
 
                             item = dict(current_eval)
+                            
+                            outcomes_for_expected_wear = self.calculate_contract_outcomes_details(current, is_stattrak=is_stattrak)
+                            expected_wear = self.calculate_expected_wear_from_outcomes(outcomes_for_expected_wear)
+                            if expected_wear is None:
+                                expected_wear = self._determine_wear_from_float(float(current_eval.get('average_normalized_float') or 0.0))
+                            
+                            target_max_avg_float = self.calculate_max_avg_float_for_outcomes(outcomes_for_expected_wear, str(best_wear))
+                            
                             item.update({
                                 'target_collection': target_c,
                                 'is_stattrak': bool(is_stattrak),
@@ -1620,7 +1754,8 @@ class ContractCalculator(_PriceLookupMixin):
                                 'hunt_output': str(current_best_out.get('name') or ''),
                                 'hunt_output_price': float(current_best_out.get('price') or 0.0),
                                 'hunt_target_wear': best_wear,
-                                'hunt_expected_wear': self._determine_wear_from_float(float(current_eval.get('average_normalized_float') or 0.0)),
+                                'hunt_expected_wear': expected_wear,
+                                'target_max_avg_float': round(float(target_max_avg_float), 6) if target_max_avg_float is not None else None,
                                 'hunt_input_rarity': self._normalize_rarity(input_rarity),
                                 'hunt_filler_collection': filler_c,
                                 'chance_of_target': float(current_chance_target),
@@ -2156,48 +2291,18 @@ class ContractCalculator(_PriceLookupMixin):
         """
         if not contract_skins or len(contract_skins) != 10:
             return None
-
-        wear_thresholds = {
-            'Factory New': 0.07,
-            'Minimal Wear': 0.15,
-            'Field-Tested': 0.38,
-            'Well-Worn': 0.45,
-            'Battle-Scarred': 1.0,
-        }
-
-        
-        target_max_avg_norm = float(wear_thresholds.get(target_wear, 0.07))
-        # Safety margin: aim for 99.8% of the threshold to avoid rounding issues
-        safe_target_avg_norm = target_max_avg_norm * 0.998
         
         current_skins = [dict(s) for s in contract_skins]
-        
-        # Шаг 6: Используем avg_float (абсолютное среднее) вместо avg_norm
-        # out_float = avg_float * (max_f - min_f) + min_f
-        # Условие: out_float <= threshold → avg_float <= (threshold - min_f) / (max_f - min_f)
         
         outcomes = self.calculate_contract_outcomes_details(current_skins, is_stattrak=is_stattrak)
         if not outcomes:
             return None
 
-        # Determine the bottleneck: which outcome hits the threshold first?
-        # out_float_i = f' * (max_i - min_i) + min_i
-        # Condition: out_float_i <= threshold → f' <= (threshold - min_i) / (max_i - min_i)
+        target_avg_norm = self.calculate_max_avg_float_for_outcomes(outcomes, target_wear)
         
-        limit_avg_norm = 1.0
-        for o in outcomes:
-            min_f = float(o.get('min_float', 0.0))
-            max_f = float(o.get('max_float', 1.0))
-            denom = max_f - min_f
-            if denom > 1e-9:
-                max_norm_for_this = (target_max_avg_norm - min_f) / denom
-                if max_norm_for_this < limit_avg_norm:
-                    limit_avg_norm = max_norm_for_this
-
-        # Apply safety margin to the bottleneck avg_norm
-        target_avg_norm = max(0.0, limit_avg_norm * 0.998)
+        if target_avg_norm is None:
+            target_avg_norm = 0.07 * 0.998
         
-        # Store the target max avg norm in the contract dict for UI
         for s in current_skins:
             s['target_max_avg_float'] = round(target_avg_norm, 6)
         
@@ -2449,13 +2554,13 @@ class ContractCalculator(_PriceLookupMixin):
 
                         out_prob = float(current_eval.get('output_probability') or 0.0)
                         avg_norm_val = float(current_eval.get('average_normalized_float') or 0.0)
-                        # Determine expected wear from target skin's out_float
-                        target_skin_data = self.database.get_skin_by_name(str(current_best_out.get('name') or ''))
-                        if target_skin_data:
-                            _out_f = max(float(target_skin_data.min_float), min(float(target_skin_data.max_float), avg_norm_val))
-                            expected_wear = self._determine_wear_from_float(_out_f)
-                        else:
+                        
+                        outcomes_for_wear = self.calculate_contract_outcomes_details(current, is_stattrak=is_stattrak)
+                        expected_wear = self.calculate_expected_wear_from_outcomes(outcomes_for_wear)
+                        if expected_wear is None:
                             expected_wear = self._determine_wear_from_float(avg_norm_val)
+                        
+                        target_max_avg_float = self.calculate_max_avg_float_for_outcomes(outcomes_for_wear, str(best_wear))
 
                         out_name = None
                         out_price = 0.0
@@ -2484,6 +2589,7 @@ class ContractCalculator(_PriceLookupMixin):
                             'hunt_output_price': float(out_price),
                             'hunt_target_wear': best_wear,
                             'hunt_expected_wear': expected_wear,
+                            'target_max_avg_float': round(float(target_max_avg_float), 6) if target_max_avg_float is not None else None,
                             'hunt_input_rarity': self._normalize_rarity(input_rarity),
                             'hunt_filler_collection': filler_c,
                             'hunt_filler_outcomes': self._get_next_grade_skins_count(filler_c, input_rarity, is_stattrak=is_stattrak) if filler_c else None,
@@ -3548,6 +3654,14 @@ class ContractCalculator(_PriceLookupMixin):
                 if max_investment and contract_data['input_cost'] > max_investment:
                     continue
 
+                outcomes_for_expected_wear = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)
+                expected_wear = self.calculate_expected_wear_from_outcomes(outcomes_for_expected_wear)
+                if expected_wear is None:
+                    avg_norm_val = float(contract_data.get('average_normalized_float') or 0.0)
+                    expected_wear = self._determine_wear_from_float(avg_norm_val)
+                
+                target_max_avg_float = self.calculate_max_avg_float_for_outcomes(outcomes_for_expected_wear, str(t.get('target_wear') or ''))
+                
                 contract_data.update({
                     'target_collection': target_collection,
                     'is_stattrak': is_stattrak,
@@ -3557,12 +3671,8 @@ class ContractCalculator(_PriceLookupMixin):
                     'hunt_output': t.get('max_output_name'),
                     'hunt_output_price': t.get('max_output_price'),
                     'hunt_target_wear': t.get('target_wear'),
-                    'hunt_expected_wear': (lambda f_prime, name: (
-                        (lambda skin: self._determine_wear_from_float(
-                            f_prime * (float(skin.max_float) - float(skin.min_float)) + float(skin.min_float)
-                        ) if skin else self._determine_wear_from_float(f_prime))
-                        (self.database.get_skin_by_name(str(name or "")))
-                    ))(float(contract_data.get('average_normalized_float') or 0.0), t.get('max_output_name')),
+                    'hunt_expected_wear': expected_wear,
+                    'target_max_avg_float': round(float(target_max_avg_float), 6) if target_max_avg_float is not None else None,
                     'hunt_input_rarity': input_rarity,
                     'hunt_filler_collection': "+".join(used_collections) if used_collections else None,
                     'hunt_filler_outcomes': (
@@ -4025,14 +4135,12 @@ class ContractCalculator(_PriceLookupMixin):
                             })
                             continue
 
-# Determine expected wear from target skin's out_float
-                    target_skin = self.database.get_skin_by_name(str(best_out_name or ''))
-                    if target_skin:
-                        _f_prime = self._calculate_average_normalized_float(contract_skins)
-                        _out_f = float(_f_prime) * (float(target_skin.max_float) - float(target_skin.min_float)) + float(target_skin.min_float)
-                        expected_wear = self._determine_wear_from_float(_out_f)
-                    else:
+                    outcomes_for_expected_wear = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)
+                    expected_wear = self.calculate_expected_wear_from_outcomes(outcomes_for_expected_wear)
+                    if expected_wear is None:
                         expected_wear = self._determine_wear_from_float(self._calculate_average_normalized_float(contract_skins))
+                    
+                    target_max_avg_float = self.calculate_max_avg_float_for_outcomes(outcomes_for_expected_wear, str(best_out_wear))
                 else:
                     if contract_skins is None:
                         skipped_float_fail += 1
@@ -4096,6 +4204,7 @@ class ContractCalculator(_PriceLookupMixin):
                     'hunt_output_price': best_out_price,
                     'hunt_target_wear': best_out_wear,
                     'hunt_expected_wear': expected_wear,
+                    'target_max_avg_float': round(float(target_max_avg_float), 6) if target_max_avg_float is not None else None,
                     'hunt_input_rarity': self._normalize_rarity(input_rarity),
                     'hunt_filler_collection': "+".join(used_collections) if used_collections else None,
                     'hunt_filler_outcomes': int(min(used_outcomes)) if used_outcomes else None,

@@ -516,9 +516,6 @@ def _floor3(x: float) -> float:
 
 
 def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, contract: Dict, fallback_target_wear: str) -> Tuple[Optional[float], bool]:
-    # Returns (thr, ok). If ok=False, strict guarantee is impossible for all outcomes (wears_avail constraints).
-    # We compute threshold per-outcome using its expected wear (as shown in Outcomes list). This is stricter
-    # than hunt_expected_wear in cases where some outcomes are expected to be better than the main target.
     if not svc.calculator:
         return (None, False)
 
@@ -534,68 +531,12 @@ def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, cont
     if not outs:
         return (None, False)
 
-    thr_global = 1.0
-    for o in outs:
-        nm = str(o.get('name') or '')
-        # Use the contract's overall expected wear as the threshold for all outcomes
-        t_idx = _wear_idx(str(fallback_target_wear or '').strip())
-        skin_data = None
-        try:
-            skin_data = svc.calculator.database.get_skin_by_name(nm)
-        except Exception:
-            skin_data = None
-        if not skin_data:
-            # Without min/max, can't guarantee
-            return (None, False)
-
-        try:
-            min_f = float(skin_data.min_float)
-            max_f = float(skin_data.max_float)
-        except Exception:
-            return (None, False)
-
-        denom = float(max_f - min_f)
-        if denom <= 1e-9:
-            return (None, False)
-
-        try:
-            wears_avail = list(getattr(skin_data, 'wears', None) or [])
-        except Exception:
-            wears_avail = []
-        
-        # Determine which computed wear buckets are acceptable given target_wear.
-        # Only allow wear levels that are actually available for this skin.
-        # This ensures the bot's calculations match the calculator's logic which
-        # degrades to the nearest worse available wear when a computed wear is not available.
-        allowed_idxs = [i for i in range(0, t_idx + 1) if _WEAR_ORDER[i] in wears_avail]
-        
-        if not allowed_idxs:
-            return (None, False)
-        
-        max_allowed_idx = max(allowed_idxs)
-        max_allowed_wear = _WEAR_ORDER[max_allowed_idx]
-        
-        # Шаг 7: CS2 использует включительные верхние границы для всех wear
-        # FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
-        # Для Battle-Scarred используем max_f скина
-        if max_allowed_wear == 'Battle-Scarred':
-            max_out_float_ok = float(max_f)
-        else:
-            # Используем сам порог (включительно) без epsilon
-            max_out_float_ok = float(_WEAR_THRESHOLDS.get(max_allowed_wear, 1.0))
-
-        # Новая формула CS2: out_float = clamp(avg_norm, min_f, max_f)
-        # Условие: out_float <= max_out_float_ok
-        # Решение: avg_norm <= min(max_out_float_ok, max_f)
-        thr_i = min(max_out_float_ok, float(max_f))
-        if thr_i < 0.0:
-            thr_i = 0.0
-        if thr_i > 1.0:
-            thr_i = 1.0
-        if thr_i < thr_global:
-            thr_global = thr_i
-
-    return (float(thr_global), True)
+    thr = svc.calculator.calculate_max_avg_float_for_outcomes(outs, str(fallback_target_wear or '').strip())
+    
+    if thr is None:
+        return (None, False)
+    
+    return (float(thr), True)
 
 
 def _fmt_float3(x: float) -> str:
@@ -854,6 +795,11 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         lines.append("No inputs found.")
         return "\n".join(lines)
 
+    # Show max avg float for contract first
+    if thr_ok and avg_norm_thr is not None:
+        lines.append("")
+        lines.append(f"<b>Max avg float:</b> {_fmt_float3(avg_norm_thr)} (guarantees {html.escape(expected_wear)} for all outcomes)")
+
     # Group identical inputs by (name, wear, collection)
     groups = OrderedDict()
     for s in ins:
@@ -906,17 +852,13 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         if not thr_ok or avg_norm_thr is None:
             guaranteed = False
         else:
-            # Новая формула CS2: avg_norm_thr уже является максимальным float
-            # Не нужно денормализовать - clamp(avg_norm, min_f, max_f) работает напрямую
-            max_ok = min(float(in_max), float(avg_norm_thr))
-            min_ok = max(float(in_min), 0.0)
-
-        min_disp = _ceil3(min_ok)
-        max_disp = _floor3(max_ok)
-        if min_disp > max_disp + 1e-12:
+            # Для каждого входного скина показываем стандартный диапазон его wear
+            # Отдельный скин может иметь float выше avg_norm_thr, если другие ниже
+            # Поэтому "guaranteed" = False для отдельных скинов, True только для контракта в целом
             guaranteed = False
-            min_disp = _ceil3(float(in_min))
-            max_disp = _floor3(float(in_max))
+
+        min_disp = _ceil3(float(in_min))
+        max_disp = _floor3(float(in_max))
 
         buy_source = str(g.get('buy_source') or '').strip().upper()
         if buy_source == 'CSFLOAT':
