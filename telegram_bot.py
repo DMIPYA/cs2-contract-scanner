@@ -867,6 +867,7 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
                 'count': 0,
                 'total_price': 0.0,
                 'buy_source': None,
+                'floats': [],
             }
             groups[key] = g
         g['count'] = int(g.get('count') or 0) + 1
@@ -876,6 +877,12 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
             g['total_price'] = float(g.get('total_price') or 0.0) + float(s.get('price') or 0.0)
         except Exception:
             pass
+        skin_float = s.get('float')
+        if skin_float is not None:
+            try:
+                g['floats'].append(float(skin_float))
+            except Exception:
+                pass
 
     st = bool(c.get('is_stattrak'))
     st_short = 'ST' if st else 'NO'
@@ -896,7 +903,6 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         if not thr_ok or avg_norm_thr is None:
             guaranteed = False
         else:
-            # Convert avg_norm threshold into raw float bound for this input skin using its min/max float range.
             skin_data = None
             try:
                 if svc.calculator:
@@ -918,11 +924,9 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
                         guaranteed = False
                     else:
                         max_by_norm = float(smin) + float(avg_norm_thr) * float(denom)
-                        # Intersect with wear bracket
                         min_ok = max(float(in_min), float(smin))
                         max_ok = min(float(in_max), float(max_by_norm))
 
-        # Conservative rounding to 0.001 (never over-promise)
         min_disp = _ceil3(min_ok)
         max_disp = _floor3(max_ok)
         if min_disp > max_disp + 1e-12:
@@ -937,10 +941,10 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
             url = _market_csgo_search_url(skin_name=nm, wear=(wr_txt if wr_txt != 'N/A' else ''), is_stattrak=st)
         buy = f"<a href=\"{html.escape(url)}\">buy</a>"
 
-        rng = f"{_fmt_float3(min_disp)}-{_fmt_float3(max_disp)}"
         if guaranteed:
-            rng_txt = f"({rng})"
+            rng_txt = f"(max: {_fmt_float3(max_disp)})"
         else:
+            rng = f"{_fmt_float3(min_disp)}-{_fmt_float3(max_disp)}"
             rng_txt = f"({rng}, not guaranteed)"
 
         lines.append(
