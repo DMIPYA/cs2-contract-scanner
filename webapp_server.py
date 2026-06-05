@@ -234,7 +234,7 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
                                 min_f = float(skin_data.min_float)
                                 max_f = float(skin_data.max_float)
                                 # Denormalize: real_float = norm * (max - min) + min
-                                denorm_float = max_avg_norm * (max_f - min_f) + min_f
+                                denorm_float = max(min_f, min(max_f, max_avg_norm))
                                 denorm_floats.append(denorm_float)
                     
                     if denorm_floats:

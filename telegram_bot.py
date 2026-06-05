@@ -584,7 +584,10 @@ def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, cont
             # Используем сам порог (включительно) без epsilon
             max_out_float_ok = float(_WEAR_THRESHOLDS.get(max_allowed_wear, 1.0))
 
-        thr_i = (max_out_float_ok - float(min_f)) / float(denom)
+        # Новая формула CS2: out_float = clamp(avg_norm, min_f, max_f)
+        # Условие: out_float <= max_out_float_ok
+        # Решение: avg_norm <= min(max_out_float_ok, max_f)
+        thr_i = min(max_out_float_ok, float(max_f))
         if thr_i < 0.0:
             thr_i = 0.0
         if thr_i > 1.0:
@@ -903,29 +906,10 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         if not thr_ok or avg_norm_thr is None:
             guaranteed = False
         else:
-            skin_data = None
-            try:
-                if svc.calculator:
-                    skin_data = svc.calculator.database.get_skin_by_name(nm)
-            except Exception:
-                skin_data = None
-
-            if not skin_data:
-                guaranteed = False
-            else:
-                try:
-                    smin = float(skin_data.min_float)
-                    smax = float(skin_data.max_float)
-                except Exception:
-                    guaranteed = False
-                else:
-                    denom = float(smax - smin)
-                    if denom <= 1e-9:
-                        guaranteed = False
-                    else:
-                        max_by_norm = float(smin) + float(avg_norm_thr) * float(denom)
-                        min_ok = max(float(in_min), float(smin))
-                        max_ok = min(float(in_max), float(max_by_norm))
+            # Новая формула CS2: avg_norm_thr уже является максимальным float
+            # Не нужно денормализовать - clamp(avg_norm, min_f, max_f) работает напрямую
+            max_ok = min(float(in_max), float(avg_norm_thr))
+            min_ok = max(float(in_min), 0.0)
 
         min_disp = _ceil3(min_ok)
         max_disp = _floor3(max_ok)

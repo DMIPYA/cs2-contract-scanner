@@ -2452,7 +2452,7 @@ class ContractCalculator(_PriceLookupMixin):
                         # Determine expected wear from target skin's out_float
                         target_skin_data = self.database.get_skin_by_name(str(current_best_out.get('name') or ''))
                         if target_skin_data:
-                            _out_f = avg_norm_val * (float(target_skin_data.max_float) - float(target_skin_data.min_float)) + float(target_skin_data.min_float)
+                            _out_f = max(float(target_skin_data.min_float), min(float(target_skin_data.max_float), avg_norm_val))
                             expected_wear = self._determine_wear_from_float(_out_f)
                         else:
                             expected_wear = self._determine_wear_from_float(avg_norm_val)
@@ -4875,7 +4875,7 @@ class ContractCalculator(_PriceLookupMixin):
                 if max_f <= min_f + 1e-9:
                     min_f, max_f = 0.0, 1.0
 
-                out_float = float(avg_norm) * (max_f - min_f) + min_f
+                out_float = max(min_f, min(max_f, float(avg_norm)))
                 
                 available_wears_for_skin = wears_avail if wears_avail else None
                 wear = self._determine_wear_from_float(out_float, available_wears=available_wears_for_skin)
