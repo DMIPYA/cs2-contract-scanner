@@ -2946,6 +2946,7 @@ class ContractCalculator(_PriceLookupMixin):
                                 self._memo_collection_avg_outcome_price.clear()
                                 self._memo_collection_score.clear()
                                 self._memo_collection_imbalance.clear()
+                                self._memo_collection_output_range.clear()
         self._memo_possible_outputs.clear()
         self._memo_contract_target_prob.clear()
         self._memo_contract_max_output.clear()
