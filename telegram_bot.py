@@ -800,10 +800,10 @@ def _render_details(*, svc: TargetHuntingService, mode: str, max_inv: Optional[f
             end_i = pos + int(g['count']) - 1
             pos = end_i + 1
             idx_txt = f"{start_i:02d}-{end_i:02d}." if end_i > start_i else f"{start_i:02d}."
-            avg_f = None
-            if g['floats']:
-                avg_f = sum(g['floats']) / float(len(g['floats']))
-            f_txt = "N/A" if avg_f is None else f"{float(avg_f):.4f}"
+        avg_f = None
+        if g['floats']:
+            avg_f = sum(g['floats']) / float(len(g['floats']))
+        f_txt = "N/A" if avg_f is None else f"{float(avg_f):.4f}"
             x_txt = f" ({int(g['count'])}x)" if int(g['count']) > 1 else ""
 
             wear_txt = ''
@@ -958,14 +958,6 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
             guaranteed = False
 
         min_disp = _ceil3(float(in_min))
-        group_max_float = _calc_group_max_float_for_contract(
-            svc=svc,
-            contract=c,
-            group=g,
-            avg_norm_thr=avg_norm_thr,
-        )
-        if group_max_float is None:
-            group_max_float = _wear_to_max_float(wr_txt)
 
         buy_source = str(g.get('buy_source') or '').strip().upper()
         if buy_source == 'CSFLOAT':
@@ -975,10 +967,9 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         buy = f"<a href=\"{html.escape(url)}\">buy</a>"
 
         if guaranteed:
-            rng_txt = f"(max: {float(group_max_float):.4f})"
+            rng_txt = f"(f: {f_txt})"
         else:
-            rng = f"{_fmt_float3(min_disp)}-{float(group_max_float):.4f}"
-            rng_txt = f"({rng}, not guaranteed)"
+            rng_txt = f"(f: {f_txt}, not guaranteed)"
 
         lines.append(
             f"<b>{i:02d}.</b> <code>{st_short}</code> {cnt}x {html.escape(nm)} ({html.escape(wr_txt)}) | "

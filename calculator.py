@@ -1744,7 +1744,7 @@ class ContractCalculator(_PriceLookupMixin):
                             outcomes_for_expected_wear = self.calculate_contract_outcomes_details(current, is_stattrak=is_stattrak)
                             expected_wear = self.calculate_expected_wear_from_outcomes(outcomes_for_expected_wear)
                             if expected_wear is None:
-                                expected_wear = self._determine_wear_from_float(float(current_eval.get('average_normalized_float') or 0.0))
+                                expected_wear = self._determine_wear_from_float(float(current_eval.get('average_float') or current_eval.get('average_normalized_float') or 0.0))
                             
                             target_max_avg_float = self.calculate_max_avg_float_for_outcomes(outcomes_for_expected_wear, str(best_wear))
                             
@@ -2556,7 +2556,7 @@ class ContractCalculator(_PriceLookupMixin):
                             continue
 
                         out_prob = float(current_eval.get('output_probability') or 0.0)
-                        avg_norm_val = float(current_eval.get('average_normalized_float') or 0.0)
+                        avg_norm_val = float(current_eval.get('average_float') or current_eval.get('average_normalized_float') or 0.0)
                         
                         outcomes_for_wear = self.calculate_contract_outcomes_details(current, is_stattrak=is_stattrak)
                         expected_wear = self.calculate_expected_wear_from_outcomes(outcomes_for_wear)
@@ -3603,7 +3603,7 @@ class ContractCalculator(_PriceLookupMixin):
                     )
                     if len(fillers) >= filler_count:
                         candidate_contract = main_skins + fillers[:filler_count]
-                        candidate_avg_norm = self._calculate_average_normalized_float(candidate_contract, is_stattrak)
+                        candidate_avg_norm = self._calculate_average_float(candidate_contract)
                         if candidate_avg_norm <= (target_avg + 1e-9):
                             break
                         fillers = []
@@ -3638,8 +3638,8 @@ class ContractCalculator(_PriceLookupMixin):
                 if not ok:
                     continue
 
-                if self._calculate_weighted_average_normalized_float(contract_skins, is_stattrak) > 0.15:
-                    continue
+                    if self._calculate_average_float(contract_skins) > 0.15:
+                        continue
                 contract_data = self._calculate_contract_profit(
                     contract_skins, target_collection, is_stattrak
                 )
@@ -4056,7 +4056,7 @@ class ContractCalculator(_PriceLookupMixin):
                         cand = cheap_pool_sorted[: int(filler_count)]
 
                         candidate_contract = core_skins[:core_count] + cand
-                        candidate_avg_norm = self._calculate_average_normalized_float(candidate_contract, is_stattrak)
+                        candidate_avg_norm = self._calculate_average_float(candidate_contract)
                         if candidate_avg_norm > (target_avg + 1e-9):
                             continue
                         total_price = sum(float(s.get('price') or 0.0) for s in cand)
@@ -4142,7 +4142,7 @@ class ContractCalculator(_PriceLookupMixin):
                     outcomes_for_expected_wear = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)
                     expected_wear = self.calculate_expected_wear_from_outcomes(outcomes_for_expected_wear)
                     if expected_wear is None:
-                        expected_wear = self._determine_wear_from_float(self._calculate_weighted_average_normalized_float(contract_skins, is_stattrak))
+                        expected_wear = self._determine_wear_from_float(self._calculate_average_float(contract_skins))
                     
                     target_max_avg_float = self.calculate_max_avg_float_for_outcomes(outcomes_for_expected_wear, str(best_out_wear))
                 else:
@@ -4184,7 +4184,7 @@ class ContractCalculator(_PriceLookupMixin):
                     skipped_over_max_investment += 1
                     continue
 
-                fp_actual = self._calculate_weighted_average_normalized_float(contract_skins, is_stattrak)
+                fp_actual = self._calculate_average_float(contract_skins)
                 contract_data = self._calculate_contract_profit(contract_skins, target_c, is_stattrak)
 
                 risk_metrics = self._compute_risk_metrics(contract_skins, is_stattrak=is_stattrak)
@@ -4402,7 +4402,7 @@ class ContractCalculator(_PriceLookupMixin):
                             cheap_pool_sorted = sorted(cheap_pool, key=lambda x: (x.get('float', 1.0), x.get('price', 1e9)))
                             cand = cheap_pool_sorted[: int(filler_count)]
                             candidate_contract = main_skins + cand
-                            candidate_avg_norm = self._calculate_average_normalized_float(candidate_contract, is_stattrak)
+                            candidate_avg_norm = self._calculate_average_float(candidate_contract)
                             if candidate_avg_norm > (target_avg + 1e-9):
                                 continue
                             total_price = sum(float(s.get('price') or 0.0) for s in cand)
@@ -4431,7 +4431,7 @@ class ContractCalculator(_PriceLookupMixin):
                         continue
 
                     contract_skins = main_skins + fillers[:filler_count]
-                    if self._calculate_weighted_average_normalized_float(contract_skins, is_stattrak) > 0.15:
+                    if self._calculate_average_float(contract_skins) > 0.15:
                         diag_float_fail += 1
                         continue
 
@@ -4987,17 +4987,14 @@ class ContractCalculator(_PriceLookupMixin):
         return available_wears[-1] if available_wears else ideal_wear
 
     def calculate_contract_outcomes_details(self, contract_skins: List[Dict], is_stattrak: bool) -> List[Dict]:
-        # skinsearch algorithm: weighted normalized float from input collections,
-        # then out_float = clamp(f', min_f, max_f), wear from out_float.
-        avg_norm = self._calculate_weighted_average_normalized_float(contract_skins, is_stattrak)
-        if avg_norm <= 0.0 and contract_skins:
-            # Fallback for incomplete DB data: keep previous behavior rather than
-            # returning an all-FN artifact.
-            avg_norm = self._calculate_weighted_average_normalized_float(contract_skins, is_stattrak)
-        if avg_norm < 0.0:
-            avg_norm = 0.0
-        if avg_norm > 1.0:
-            avg_norm = 1.0
+        # CS2/skinsearch behavior for trade-up outputs:
+        # use raw average float of the contract, then clamp to each output skin's
+        # [min_float, max_float] and determine wear from the resulting absolute float.
+        avg_float = self._calculate_average_float(contract_skins)
+        if avg_float < 0.0:
+            avg_float = 0.0
+        if avg_float > 1.0:
+            avg_float = 1.0
         
         input_rarity = contract_skins[0].get('rarity') if contract_skins else None
         if not input_rarity:
@@ -5049,8 +5046,7 @@ class ContractCalculator(_PriceLookupMixin):
                 if max_f <= min_f + 1e-9:
                     min_f, max_f = 0.0, 1.0
 
-                out_float = max(min_f, min(max_f, float(avg_norm)))
-                
+                out_float = max(min_f, min(max_f, float(avg_float)))
                 available_wears_for_skin = wears_avail if wears_avail else None
                 wear = self._determine_wear_from_float(out_float, available_wears=available_wears_for_skin)
                 
@@ -5119,7 +5115,7 @@ class ContractCalculator(_PriceLookupMixin):
 
         return outcomes
     
-    def _calculate_contract_profit(self, contract_skins: List[Dict], target_collection: str, 
+    def _calculate_contract_profit(self, contract_skins: List[Dict], target_collection: str,
                                 is_stattrak: bool) -> Dict:
         """Расчет профита контракта"""
         # Стоимость входных скинов
@@ -5134,7 +5130,7 @@ class ContractCalculator(_PriceLookupMixin):
 
         # Расчет среднего флоута входа
         avg_float = self._calculate_average_float(contract_skins)
-        avg_norm_float = self._calculate_weighted_average_normalized_float(contract_skins, is_stattrak)
+        avg_norm_float = self._calculate_average_float(contract_skins)
 
         # Считаем все возможные исходы с индивидуальным out_float/wear/price
         outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)

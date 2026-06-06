@@ -1206,10 +1206,9 @@ function renderDetailFull(c) {
       const realAvg = g.market_depth && g.market_depth.avg_price_for_needed ? g.market_depth.avg_price_for_needed : null;
       const realTotal = realAvg ? realAvg * g.count : null;
       const perItemTxt = g.count > 1 ? (realAvg ? `avg $${fmt$(realAvg)} ea` : `$${fmt$(g.per_item)} ea`) : '';
-      // Show wear + max float hint per group
-      const maxF = g.max_float_for_wear;
-      const wearLine = maxF != null
-        ? `${escHtml(g.wear)} · max ${maxF.toFixed(4)}`
+      const fVal = g.avg_float;
+      const wearLine = fVal != null
+        ? `${escHtml(g.wear)} · f ${fVal.toFixed(4)}`
         : escHtml(g.wear);
       return `
 <a class="input-item" data-gidx="${gIdx}" href="${marketUrl(g.name, g.wear, c.is_stattrak, g.buy_source)}" target="_blank" rel="noopener" style="text-decoration:none">
