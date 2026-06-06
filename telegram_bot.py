@@ -481,6 +481,20 @@ def _wear_to_float_range(wear: str) -> Tuple[float, float]:
     return (0.0, 1.0)
 
 
+_WEAR_MAX_FLOAT = {
+    'Factory New': 0.0699,
+    'Minimal Wear': 0.1499,
+    'Field-Tested': 0.3799,
+    'Well-Worn': 0.4499,
+    'Battle-Scarred': 1.0,
+}
+
+
+def _wear_to_max_float(wear: str) -> float:
+    w = str(wear or '').strip()
+    return float(_WEAR_MAX_FLOAT.get(w, 1.0))
+
+
 _WEAR_ORDER = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
 _WEAR_THRESHOLDS = {
     'Factory New': 0.07,
@@ -537,6 +551,92 @@ def _calc_avg_norm_threshold_for_all_outcomes(*, svc: TargetHuntingService, cont
         return (None, False)
     
     return (float(thr), True)
+
+
+def _skin_normalized_float(*, db, skin_name: str, item_float: float) -> float:
+    try:
+        skin_data = db.get_skin_by_name(str(skin_name or '')) if db else None
+    except Exception:
+        skin_data = None
+
+    try:
+        raw_float = float(item_float)
+    except Exception:
+        raw_float = 0.0
+
+    if not skin_data:
+        return max(0.0, min(1.0, raw_float))
+
+    try:
+        min_f = float(skin_data.min_float)
+        max_f = float(skin_data.max_float)
+    except Exception:
+        return max(0.0, min(1.0, raw_float))
+
+    denom = max_f - min_f
+    if denom <= 1e-9:
+        return 0.0
+
+    return max(0.0, min(1.0, (raw_float - min_f) / denom))
+
+
+def _calc_group_max_float_for_contract(*, svc: TargetHuntingService, contract: Dict, group: Dict, avg_norm_thr: Optional[float]) -> Optional[float]:
+    if avg_norm_thr is None or not svc or not getattr(svc, 'database', None):
+        return None
+
+    ins = list(contract.get('input_skins') or [])
+    if not ins:
+        return None
+
+    g_name = str(group.get('name') or '')
+    g_wear = str(group.get('wear') or '')
+    g_collection = str(group.get('collection') or '')
+
+    def _same_group(s: Dict) -> bool:
+        return (
+            str(s.get('name') or '') == g_name
+            and str(s.get('wear') or '') == g_wear
+            and str(s.get('collection') or '') == g_collection
+        )
+
+    group_items = [s for s in ins if _same_group(s)]
+    group_count = len(group_items)
+    if group_count <= 0:
+        return None
+
+    db = svc.database
+    skin_data = db.get_skin_by_name(g_name)
+    if not skin_data:
+        return None
+
+    try:
+        min_f = float(skin_data.min_float)
+        max_f = float(skin_data.max_float)
+    except Exception:
+        return None
+
+    denom = max_f - min_f
+    if denom <= 1e-9:
+        return min_f
+
+    total_budget = float(avg_norm_thr) * float(len(ins))
+    other_norm = 0.0
+    for s in ins:
+        if _same_group(s):
+            continue
+        other_norm += _skin_normalized_float(
+            db=db,
+            skin_name=str(s.get('name') or ''),
+            item_float=float(s.get('float') or 0.0),
+        )
+
+    allowed_norm_per_item = (total_budget - other_norm) / float(group_count)
+    if allowed_norm_per_item < 0.0:
+        return None
+
+    allowed_norm_per_item = max(0.0, min(1.0, allowed_norm_per_item))
+    max_float = min_f + allowed_norm_per_item * denom
+    return max(min_f, min(max_float, max_f))
 
 
 def _fmt_float3(x: float) -> str:
@@ -844,9 +944,9 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         cnt = int(g.get('count') or 0)
         total_price = float(g.get('total_price') or 0.0)
 
-        in_min, in_max = _wear_to_float_range(wr_txt)
+        in_min, _ = _wear_to_float_range(wr_txt)
         min_ok = float(in_min)
-        max_ok = float(in_max)
+        max_ok = float(_wear_to_max_float(wr_txt))
         guaranteed = True
 
         if not thr_ok or avg_norm_thr is None:
@@ -858,7 +958,14 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
             guaranteed = False
 
         min_disp = _ceil3(float(in_min))
-        max_disp = _floor3(float(in_max))
+        group_max_float = _calc_group_max_float_for_contract(
+            svc=svc,
+            contract=c,
+            group=g,
+            avg_norm_thr=avg_norm_thr,
+        )
+        if group_max_float is None:
+            group_max_float = _wear_to_max_float(wr_txt)
 
         buy_source = str(g.get('buy_source') or '').strip().upper()
         if buy_source == 'CSFLOAT':
@@ -868,9 +975,9 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         buy = f"<a href=\"{html.escape(url)}\">buy</a>"
 
         if guaranteed:
-            rng_txt = f"(max: {_fmt_float3(max_disp)})"
+            rng_txt = f"(max: {float(group_max_float):.4f})"
         else:
-            rng = f"{_fmt_float3(min_disp)}-{_fmt_float3(max_disp)}"
+            rng = f"{_fmt_float3(min_disp)}-{float(group_max_float):.4f}"
             rng_txt = f"({rng}, not guaranteed)"
 
         lines.append(
