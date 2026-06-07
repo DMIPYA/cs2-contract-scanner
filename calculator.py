@@ -4987,9 +4987,8 @@ class ContractCalculator(_PriceLookupMixin):
         return available_wears[-1] if available_wears else ideal_wear
 
     def calculate_contract_outcomes_details(self, contract_skins: List[Dict], is_stattrak: bool) -> List[Dict]:
-        # CS2/skinsearch behavior for trade-up outputs:
-        # use raw average float of the contract, then clamp to each output skin's
-        # [min_float, max_float] and determine wear from the resulting absolute float.
+        # CS2 trade-up behavior for outputs:
+        # out_float = avg_input_float * (max_float - min_float) + min_float
         avg_float = self._calculate_average_float(contract_skins)
         if avg_float < 0.0:
             avg_float = 0.0
@@ -5046,7 +5045,11 @@ class ContractCalculator(_PriceLookupMixin):
                 if max_f <= min_f + 1e-9:
                     min_f, max_f = 0.0, 1.0
 
-                out_float = max(min_f, min(max_f, float(avg_float)))
+                out_float = float(avg_float) * (float(max_f) - float(min_f)) + float(min_f)
+                if out_float < min_f:
+                    out_float = float(min_f)
+                if out_float > max_f:
+                    out_float = float(max_f)
                 available_wears_for_skin = wears_avail if wears_avail else None
                 wear = self._determine_wear_from_float(out_float, available_wears=available_wears_for_skin)
                 
@@ -5180,7 +5183,7 @@ class ContractCalculator(_PriceLookupMixin):
                     _worst_idx = idx
             achievable_wear = _wear_order[_worst_idx]
         else:
-            achievable_wear = self._determine_wear_from_float(avg_norm_float)
+            achievable_wear = self._determine_wear_from_float(avg_float)
 
         return {
             'input_cost': input_cost,
