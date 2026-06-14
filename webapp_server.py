@@ -421,7 +421,7 @@ def _serialize_contract_detail(idx: int, c: dict, *, mode: str = 'PROFIT') -> di
 
 @app.get('/', response_class=HTMLResponse)
 async def serve_app() -> HTMLResponse:
-    # Ищем в webapp/index.html или просто в index.html
+    # Look in webapp/index.html or just index.html
     current_dir = Path(__file__).resolve().parent
     html_paths = [
         current_dir / 'webapp' / 'index.html',
@@ -432,7 +432,7 @@ async def serve_app() -> HTMLResponse:
         if p.exists():
             return HTMLResponse(content=p.read_text(encoding='utf-8'))
             
-    # Если не нашли, выведем список файлов для отладки прямо в браузере
+    # If not found, list files for debugging right in the browser
     files = [str(f.name) for f in current_dir.iterdir()]
     webapp_files = []
     if (current_dir / 'webapp').is_dir():

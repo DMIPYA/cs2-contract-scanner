@@ -5,9 +5,9 @@ logger = logging.getLogger('calculator.price_lookup')
 
 
 class _PriceLookupMixin:
-    """Mixin для поиска цены скина с 4-шаговой fallback-цепочкой.
+    """Mixin for skin price search with 4-step fallback chain.
 
-    Предполагает, что хост-класс имеет:
+    Expects the host class to have:
         - self._cached_get_price_with_float(...)
         - self._strict_input_float: bool
     """
@@ -22,22 +22,22 @@ class _PriceLookupMixin:
         strict_name_match: bool = True,
         allow_refresh: bool = False,
     ) -> Optional[Tuple[float, Optional[float], str]]:
-        """4-шаговая fallback-цепочка поиска цены скина.
+        """4-step fallback chain for skin price search.
 
-        Шаги:
-          1. strict_name_match=True + max_float (если max_float задан)
-          2. strict_name_match=False + max_float (если max_float задан)
+        Steps:
+          1. strict_name_match=True + max_float (if max_float is set)
+          2. strict_name_match=False + max_float (if max_float is set)
           3. strict_name_match=True + max_float=None
           4. strict_name_match=False + max_float=None
 
-        Возвращает:
-            (price, skin_float, wear) или None если ни один шаг не дал результата.
+        Returns:
+            (price, skin_float, wear) or None if no step yielded a result.
         """
         price_info: Optional[Tuple[float, Optional[float], str]] = None
 
-        # Шаги 1-2: с max_float
+        # Steps 1-2: with max_float
         if max_float is not None:
-            # Шаг 1: strict match + max_float
+            # Step 1: strict match + max_float
             price_info = self._cached_get_price_with_float(
                 skin_name,
                 max_float=max_float,
@@ -46,7 +46,7 @@ class _PriceLookupMixin:
                 strict_name_match=True,
                 allow_refresh=allow_refresh,
             )
-            # Шаг 2: relaxed match + max_float
+            # Step 2: relaxed match + max_float
             if not price_info:
                 price_info = self._cached_get_price_with_float(
                     skin_name,
@@ -57,9 +57,9 @@ class _PriceLookupMixin:
                     allow_refresh=allow_refresh,
                 )
 
-        # Шаги 3-4: без max_float
+        # Steps 3-4: without max_float
         if not price_info:
-            # Шаг 3: strict match + max_float=None
+            # Step 3: strict match + max_float=None
             price_info = self._cached_get_price_with_float(
                 skin_name,
                 target_wear=None,
@@ -70,7 +70,7 @@ class _PriceLookupMixin:
                 allow_refresh=allow_refresh,
             )
         if not price_info:
-            # Шаг 4: relaxed match + max_float=None
+            # Step 4: relaxed match + max_float=None
             price_info = self._cached_get_price_with_float(
                 skin_name,
                 target_wear=None,
@@ -89,10 +89,10 @@ class _PriceLookupMixin:
         *,
         max_float: Optional[float] = None,
     ) -> bool:
-        """Проверяет, проходит ли скин фильтрацию по float/wear.
+        """Check if the skin passes float/wear filtering.
 
-        Учитывает self._strict_input_float.
-        Возвращает True если скин подходит, False если нужно исключить.
+        Considers self._strict_input_float.
+        Returns True if the skin is suitable, False if it should be excluded.
         """
         _price, skin_float, wear = price_info
 
@@ -124,7 +124,7 @@ class _PriceLookupMixin:
         outcomes_count: Optional[int] = None,
         efficiency: float = 0.0,
     ) -> Dict:
-        """Собирает словарь скина из price_info."""
+        """Build skin dict from price_info."""
         price, skin_float, wear = price_info
         entry: Dict = {
             'name': skin_name,

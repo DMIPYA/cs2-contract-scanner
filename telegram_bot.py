@@ -800,10 +800,10 @@ def _render_details(*, svc: TargetHuntingService, mode: str, max_inv: Optional[f
             end_i = pos + int(g['count']) - 1
             pos = end_i + 1
             idx_txt = f"{start_i:02d}-{end_i:02d}." if end_i > start_i else f"{start_i:02d}."
-        avg_f = None
-        if g['floats']:
-            avg_f = sum(g['floats']) / float(len(g['floats']))
-        f_txt = "N/A" if avg_f is None else f"{float(avg_f):.4f}"
+            avg_f = None
+            if g['floats']:
+                avg_f = sum(g['floats']) / float(len(g['floats']))
+            f_txt = "N/A" if avg_f is None else f"{float(avg_f):.4f}"
             x_txt = f" ({int(g['count'])}x)" if int(g['count']) > 1 else ""
 
             wear_txt = ''
@@ -952,9 +952,9 @@ def _render_craft(*, svc: TargetHuntingService, mode: str, max_inv: Optional[flo
         if not thr_ok or avg_norm_thr is None:
             guaranteed = False
         else:
-            # Для каждого входного скина показываем стандартный диапазон его wear
-            # Отдельный скин может иметь float выше avg_norm_thr, если другие ниже
-            # Поэтому "guaranteed" = False для отдельных скинов, True только для контракта в целом
+            # For each input skin, show the standard wear range
+            # An individual skin may have float above avg_norm_thr if others are lower
+            # Therefore "guaranteed" = False for individual skins, True only for the contract as a whole
             guaranteed = False
 
         min_disp = _ceil3(float(in_min))
@@ -1106,7 +1106,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_refresh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Принудительное обновление кэша цен и контрактов"""
+    """Force refresh of price and contract cache"""
     assert update.message
     svc = context.application.bot_data.get('svc')
     if not svc:
@@ -1263,7 +1263,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await loading.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
             except Exception:
                 await q.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
-    # Убираем спам логи о рендеринге деталей
+    # Suppress spam logs about details rendering
     # try:
     #     logger.info('Details render done: idx=%s mode=%s in %.2fs', str(idx), str(mode), time.time() - start)
     # except Exception:
@@ -1294,7 +1294,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await loading.edit_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
             except Exception:
                 await q.message.reply_text(text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
-    # Убираем спам логи о рендеринге craft
+    # Suppress spam logs about craft rendering
     # try:
     #     logger.info('Craft render done: idx=%s mode=%s in %.2fs', str(idx), str(mode), time.time() - start)
     # except Exception:
@@ -1326,7 +1326,7 @@ async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
     low = msg.lower()
     err_type = type(err).__name__ if err else 'unknown'
 
-    # КРИТИЧНО: ConflictError означает что бот запущен в двух местах одновременно
+    # CRITICAL: ConflictError means the bot is running in two places simultaneously
     if 'conflict' in low or err_type.lower() == 'conflict':
         logger.critical(
             'CONFLICT ERROR: Bot is already running in another process! '
@@ -1438,7 +1438,7 @@ def main() -> None:
         except Exception:
             token = ''
     
-    # Проверяем валидность токена
+    # Validate the token
     if not token or token == 'YOUR_NEW_TOKEN_HERE':
         logger.error('TELEGRAM_BOT_TOKEN is not set or invalid!')
         logger.error('Get a token from @BotFather in Telegram (/newbot), then set it in .env')
@@ -1458,7 +1458,7 @@ def main() -> None:
         app.bot_data.setdefault('notify_chat_ids', set())
         app.bot_data.setdefault('cache_ready_notified', False)
         app.bot_data.setdefault('chat_prefs', {})
-        # Создаем задачи после полной инициализации приложения
+        # Create tasks after full application initialization
         asyncio.create_task(_cache_ready_notifier(app))
         asyncio.create_task(_notice_worker(app))
         asyncio.create_task(_details_warmup_worker(app))

@@ -18,7 +18,7 @@ from calculator_price_lookup import _PriceLookupMixin
 
 @dataclass
 class ContractResult:
-    """Результат расчета контракта"""
+    """Contract calculation result"""
     target_skin: str
     probability: float
     investment_cost: float
@@ -32,7 +32,7 @@ class ContractResult:
 
 @dataclass
 class SkinProbability:
-    """Вероятность выпадения скина"""
+    """Probability of skin dropping"""
     skin_name: str
     probability: float
     collection: str
@@ -40,7 +40,7 @@ class SkinProbability:
 
 
 class ContractCalculator(_PriceLookupMixin):
-    """Калькулятор контрактов CS2 с реальными данными"""
+    """CS2 contract calculator with real data"""
     
     def __init__(self, database: CS2Database, price_manager: PriceManager):
         self.database = database
@@ -70,8 +70,8 @@ class ContractCalculator(_PriceLookupMixin):
         self._memo_contract_max_output: Dict[Tuple, float] = {}
         self._memo_contract_craftability: Dict[Tuple, Dict] = {}
 
-        # Гранулярные блокировки для memo-словарей (см. optimization-roadmap.md Step 2)
-        # При добавлении нового memo-словаря — добавить lock в соответствующую группу
+        # Fine-grained locks for memo-dicts (see optimization-roadmap.md Step 2)
+        # When adding a new memo-dict — add lock to the corresponding group
         self._lock_listings = threading.Lock()          # _memo_listings
         self._lock_sell_price = threading.Lock()        # _memo_effective_sell_price
         self._lock_price_float = threading.Lock()       # _memo_price_with_float, _memo_price
@@ -89,7 +89,7 @@ class ContractCalculator(_PriceLookupMixin):
             "Covert": 5
         }
         
-        # Float пороги для определения wear (CS2 стандарт)
+        # Float thresholds for determining wear (CS2 standard)
         # Factory New: 0.00 - 0.07
         # Minimal Wear: 0.07 - 0.15
         # Field-Tested: 0.15 - 0.38
@@ -103,7 +103,7 @@ class ContractCalculator(_PriceLookupMixin):
             "Battle-Scarred": 1.0
         }
         
-        # Комиссия рынка (market.csgo.com берёт ~7%, не 15% как Steam Market)
+        # Market fee (market.csgo.com charges ~7%, not 15% like Steam Market)
         try:
             self.market_fee = float(os.getenv('MARKET_SELL_FEE', '0.07') or 0.07)
         except Exception:
@@ -156,7 +156,7 @@ class ContractCalculator(_PriceLookupMixin):
         return self._last_target_suite_diagnostics
 
     def _wear_to_max_float(self, wear: str) -> float:
-        """Возвращает максимальное значение float для данного wear.
+        """Returns the maximum float value for the given wear.
         
         CS2 wear ranges:
         - Factory New: 0.00 - 0.07
@@ -182,20 +182,20 @@ class ContractCalculator(_PriceLookupMixin):
         target_wear: str,
     ) -> Optional[float]:
         """
-        Вычисляет максимально допустимый средний нормализованный float входа,
-        при котором НИ ОДИН outcome не ухудшает wear относительно target_wear.
+        Calculates the maximum allowable average normalized input float,
+        such that NO outcome degrades wear relative to target_wear.
         
         Args:
-            outcomes: список исходов от calculate_contract_outcomes_details
-            target_wear: целевой wear (например, 'Factory New', 'Minimal Wear')
+            outcomes: list of outcomes from calculate_contract_outcomes_details
+            target_wear: target wear (e.g., 'Factory New', 'Minimal Wear')
         
         Returns:
-            Максимально допустимый avg_norm (0.0-1.0) или None если гарантия невозможна
+            Maximum allowable avg_norm (0.0-1.0) or None if guarantee is impossible
         
-        Логика:
-        1. Для каждого outcome определяем максимально допустимый out_float
-        2. Переводим это в ограничение на avg_norm для данного outcome
-        3. Берём минимум по всем outcomes (самый строгий)
+        Logic:
+        1. For each outcome determine the maximum allowable out_float
+        2. Convert this to a constraint on avg_norm for that outcome
+        3. Take the minimum across all outcomes (the most restrictive)
         """
         if not outcomes:
             return None
@@ -272,16 +272,16 @@ class ContractCalculator(_PriceLookupMixin):
 
     def calculate_expected_wear_from_outcomes(self, outcomes: List[Dict]) -> Optional[str]:
         """
-        Вычисляет ожидаемый (worst-case) wear из списка outcomes.
+        Calculates the expected (worst-case) wear from a list of outcomes.
         
-        Возвращает самый плохой wear среди всех outcomes,
-        т.к. это гарантированный минимум качества при контракте.
+        Returns the worst wear among all outcomes,
+        as this is the guaranteed minimum quality for the contract.
         
         Args:
-            outcomes: список исходов от calculate_contract_outcomes_details
+            outcomes: list of outcomes from calculate_contract_outcomes_details
         
         Returns:
-            Wear строка или None если outcomes пуст
+            Wear string or None if outcomes is empty
         """
         if not outcomes:
             return None
@@ -373,8 +373,8 @@ class ContractCalculator(_PriceLookupMixin):
             )
             if not out_price or float(out_price) <= 0:
                 continue
-            # Оцениваем цену входных скинов при правильном ограничении float
-            # (т.е. сравниваем FN-выход/FN-вход, FT-выход/FT-вход — «яблоки к яблокам»).
+            # Estimate input skin price with proper float constraint
+            # (i.e. compare FN-output/FN-input, FT-output/FT-input — "apples to apples").
             max_f = self._wear_to_max_float(w)
             in_skins = self._get_main_skins(
                 collection_name,
@@ -388,8 +388,8 @@ class ContractCalculator(_PriceLookupMixin):
             in_price = float(in_skins[0].get('price') or 0.0)
             if in_price <= 0:
                 continue
-            # Score = EV-ratio: средняя цена выхода / стоимость 1 входного скина
-            # Вероятность одна и та же для всех wear → можно опустить.
+            # Score = EV-ratio: average output price / cost of 1 input skin
+            # Probability is the same for all wear → can be omitted.
             score = float(out_price) / float(in_price)
             if score > best_score:
                 best_score = float(score)
@@ -1365,8 +1365,8 @@ class ContractCalculator(_PriceLookupMixin):
                 outcomes_count_for_target = int(t.get('outcomes_count') or 0)
 
                 max_float = self._wear_to_max_float(best_wear)
-                # По умолчанию ограничиваем входной float так, чтобы выходной wear соответствовал
-                # best_wear (самому доходному). Можно переопределить через HUNT_INPUT_MAX_FLOAT.
+                # By default, constrain input float so that output wear matches
+                # best_wear (the most profitable). Can be overridden via HUNT_INPUT_MAX_FLOAT.
                 effective_max_float_default = str(os.getenv('HUNT_INPUT_MAX_FLOAT', '') or '').strip()
                 try:
                     effective_max_float = float(effective_max_float_default) if effective_max_float_default else float(max_float)
@@ -2818,8 +2818,8 @@ class ContractCalculator(_PriceLookupMixin):
             mf = float(max_float)
         except Exception:
             return None
-        # Выбираем "лучшее" качество, которое гарантированно < max_float
-        # Используем < вместо <=, так как границы wear эксклюзивные
+        # Select the "best" quality that is guaranteed < max_float
+        # Use < instead of <=, since wear boundaries are exclusive
         if mf < 0.07:
             return 'Factory New'
         if mf < 0.15:
@@ -2930,7 +2930,7 @@ class ContractCalculator(_PriceLookupMixin):
         return val
 
     def clear_price_memoization(self) -> None:
-        # Захват всех гранулярных lock в алфавитном порядке для предотвращения deadlock
+        # Acquire all granular locks in alphabetical order to prevent deadlock
         with self._lock_contract_eval:
             with self._lock_listings:
                 with self._lock_main_skins:
@@ -2961,15 +2961,15 @@ class ContractCalculator(_PriceLookupMixin):
 
     def calculate_mixed_contract_probabilities(self, input_skins: List[str]) -> List[SkinProbability]:
         """
-        Расчет вероятностей для контракта с учетом строгой проверки коллекций
+        Calculates probabilities for a contract with strict collection checking
         
         Args:
-            input_skins: список имен скинов
+            input_skins: list of skin names
             
         Returns:
-            список вероятностей для всех возможных исходов
+            list of probabilities for all possible outcomes
         """
-        # Получаем информацию о входных скинах
+        # Get input skin information
         input_skin_data = []
         for skin_name in input_skins:
             skin = self.database.get_skin_by_name(skin_name)
@@ -2979,7 +2979,7 @@ class ContractCalculator(_PriceLookupMixin):
         if not input_skin_data:
             return []
         
-        # Определяем основную коллекцию (самая частая)
+        # Determine the main collection (most frequent)
         collection_counts = defaultdict(int)
         for skin in input_skin_data:
             collection_counts[skin.collection] += 1
@@ -2987,43 +2987,43 @@ class ContractCalculator(_PriceLookupMixin):
         if not collection_counts:
             return []
         
-        # Берем коллекцию с максимальным количеством скинов
+        # Take the collection with the maximum number of skins
         main_collection = max(collection_counts, key=collection_counts.get)
         
-        # Проверяем, что все скины из одной коллекции (чистый контракт)
+        # Check that all skins are from one collection (pure contract)
         if len(collection_counts) > 1:
-            # Смешанный контракт - уменьшаем вероятности
+            # Mixed contract - reduce probabilities
             main_collection_skins = [s for s in input_skin_data if s.collection == main_collection]
-            if len(main_collection_skins) < 5:  # Минимум 5 скинов из одной коллекции
+            if len(main_collection_skins) < 5:  # Minimum 5 skins from one collection
                 return []
         
-        # Считаем количество скинов по редкостям в основной коллекции
+        # Count skins by rarity in the main collection
         rarity_counts = defaultdict(int)
         for skin in input_skin_data:
             if skin.collection == main_collection:
-                # Проверяем, что это следующий уровень редкости
+                # Check that this is the next rarity level
                 if self._is_next_rarity(skin.rarity, rarity_counts):
                     rarity_counts[skin.rarity] += 1
         
-        # Получаем все возможные исходы из основной коллекции
+        # Get all possible outcomes from the main collection
         outcomes = []
         for skin in self.database.skins.values():
             if skin.collection == main_collection:
-                # Проверяем, что это следующий уровень редкости
+                # Check that this is the next rarity level
                 if self._is_next_rarity(skin.rarity, rarity_counts):
                     outcomes.append(skin)
         
         if not outcomes:
             return []
         
-        # Рассчитываем вероятности для каждого исхода
+        # Calculate probabilities for each outcome
         probabilities = []
         total_input_skins = len([s for s in input_skin_data if s.collection == main_collection])
         
         for outcome in outcomes:
-            # Формула вероятности: (N_coll / 10) * (1 / M_coll)
-            # N_coll - количество скинов того же грейда в контракте
-            # M_coll - количество скинов того же грейда в коллекции
+            # Probability formula: (N_coll / 10) * (1 / M_coll)
+            # N_coll - number of skins of the same grade in the contract
+            # M_coll - number of skins of the same grade in the collection
             
             n_coll = rarity_counts.get(outcome.rarity, 0)
             m_coll = len([s for s in self.database.skins.values() 
@@ -3042,15 +3042,15 @@ class ContractCalculator(_PriceLookupMixin):
     
     def calculate_wear_leap(self, input_skins: List[str]) -> Dict[str, float]:
         """
-        Анализ перехода качества (Wear Leap)
+        Analysis of quality leap (Wear Leap)
         
         Args:
-            input_skins: список имен входных скинов
+            input_skins: list of input skin names
             
         Returns:
-            Dict с информацией о возможных переходах качества
+            Dict with information about possible quality leaps
         """
-        # Получаем float информацию для входных скинов
+        # Get float information for input skins
         input_floats = []
         for skin_name in input_skins:
             price_info = self.price_manager.get_skin_price_with_float(skin_name, exclude_stattrak=True)
@@ -3061,16 +3061,16 @@ class ContractCalculator(_PriceLookupMixin):
         if not input_floats:
             return {}
         
-        # Рассчитываем средний float входных скинов
+        # Calculate average float of input skins
         avg_input_float = sum(input_floats) / len(input_floats)
         
-        # Определяем возможное качество результата (CS2 алгоритм)
-        # Используем <= для верхней границы (включительно)
+        # Determine possible output quality (CS2 algorithm)
+        # Use <= for the upper bound (inclusive)
         quality_thresholds = {
             "Factory New": 0.07,
             "Minimal Wear": 0.15,
             "Field-Tested": 0.38,
-            "Well-Worn": 0.45,  # Исправлено: было 0.44
+            "Well-Worn": 0.45,  # Fixed: was 0.44
             "Battle-Scarred": 1.0
         }
         
@@ -3083,15 +3083,15 @@ class ContractCalculator(_PriceLookupMixin):
         return {
             "avg_input_float": avg_input_float,
             "result_quality": result_quality,
-            "can_be_fn": avg_input_float <= 0.07,  # Исправлено: <= вместо <
-            "can_be_mw": avg_input_float <= 0.15,  # Исправлено: <= вместо <
+            "can_be_fn": avg_input_float <= 0.07,  # Fixed: <= instead of <
+            "can_be_mw": avg_input_float <= 0.15,  # Fixed: <= instead of <
             "quality_leap": self._calculate_quality_leap(input_floats, avg_input_float)
         }
     
     def _calculate_quality_leap(self, input_floats: List[float], avg_float: float) -> str:
-        """Рассчитывает тип перехода качества (CS2 алгоритм).
+        """Calculates the quality leap type (CS2 algorithm).
         
-        Используем <= для верхней границы (включительно).
+        Use <= for the upper bound (inclusive).
         """
         if avg_float <= 0.07:
             return "FN Leap"
@@ -3113,18 +3113,19 @@ class ContractCalculator(_PriceLookupMixin):
             "Covert": 4
         }
         
-        # Находим максимальную редкость входных скинов
+        # Find the maximum rarity of input skins
         max_input_level = 0
         for rarity in input_rarity_counts:
             if rarity in rarity_hierarchy:
+
                 max_input_level = max(max_input_level, rarity_hierarchy[rarity])
         
-        # Целевая редкость должна быть на 1 уровень выше
+        # Target rarity must be 1 level higher
         target_level = rarity_hierarchy.get(target_rarity, -1)
         return target_level == max_input_level + 1
     
     def _get_possible_outcomes(self, collection_name: str, min_rarity: str) -> List[SkinData]:
-        """Получить возможные исходы для коллекции с грейдом >= min_rarity"""
+        """Get possible outcomes for a collection with grade >= min_rarity"""
         collection = self.database.get_collection(collection_name)
         if not collection:
             return []
@@ -3142,34 +3143,34 @@ class ContractCalculator(_PriceLookupMixin):
     
     def find_milspec_to_restricted_contracts(self) -> List[ContractResult]:
         """
-        Специфичный поиск: Mil-Spec -> Restricted с оптимальными филлерами
+        Specific search: Mil-Spec -> Restricted with optimal fillers
         """
         results = []
         
-        # Находим все Mil-Spec скины с ценами
+        # Find all Mil-Spec skins with prices
         all_milspec_skins = self.database.get_skins_by_rarity("Mil-Spec")
         milspec_names = [skin.name for skin in all_milspec_skins]
 
-        self._logger.info("Всего найдено Mil-Spec скинов: %s", int(len(milspec_names)))
+        self._logger.info("Total Mil-Spec skins found: %s", int(len(milspec_names)))
         
         milspec_prices = self.price_manager.market_client.get_multiple_prices(milspec_names)
         priced_milspec = [(name, price) for name, price in milspec_prices.items() if price and price > 0]
-        priced_milspec.sort(key=lambda x: x[1])  # от дешевых к дорогим
+        priced_milspec.sort(key=lambda x: x[1])  # from cheapest to most expensive
 
-        self._logger.info("Mil-Spec с ценами: %s", int(len(priced_milspec)))
-        self._logger.info("Дешевые филлеры:")
+        self._logger.info("Mil-Spec with prices: %s", int(len(priced_milspec)))
+        self._logger.info("Cheap fillers:")
         for i, (name, price) in enumerate(priced_milspec[:7]):
             self._logger.info("  %s. %s: $%.2f", int(i + 1), str(name), float(price))
         
-        # Если недостаточно скинов с ценами, выходим
+        # If not enough skins with prices, exit
         if len(priced_milspec) < 7:
-            self._logger.info("Недостаточно Mil-Spec скинов с ценами для создания филлеров")
+            self._logger.info("Not enough Mil-Spec skins with prices to create fillers")
             return results
         
-        # Берем 7 самых дешевых как филлеры
+        # Take 7 cheapest as fillers
         filler_skins = [skin[0] for skin in priced_milspec[:7]]
         
-        # Ищем коллекции с Mil-Spec и Restricted
+        # Find collections with Mil-Spec and Restricted
         milspec_collections = self.database.get_collections_with_rarity("Mil-Spec")
         
         for collection_name in milspec_collections:
@@ -3177,67 +3178,67 @@ class ContractCalculator(_PriceLookupMixin):
             if not collection:
                 continue
             
-            # Проверяем, есть ли в коллекции Restricted скины
+            # Check if the collection has Restricted skins
             restricted_skins = self.database.get_skins_by_rarity("Restricted", collection_name)
             if not restricted_skins:
                 continue
             
-            # Находим Mil-Spec скины в этой коллекции
+            # Find Mil-Spec skins in this collection
             collection_milspec = self.database.get_skins_by_rarity("Mil-Spec", collection_name)
             collection_milspec_names = [skin.name for skin in collection_milspec]
             collection_milspec_prices = self.price_manager.market_client.get_multiple_prices(collection_milspec_names)
 
             self._logger.info(
-                "В коллекции %s найдено %s Mil-Spec скинов",
-                str(collection_name),
+                "Found %s Mil-Spec skins in collection %s",
                 int(len(collection_milspec)),
+                str(collection_name),
             )
             self._logger.info(
-                "С ценами: %s",
+                "With prices: %s",
                 int(len([p for p in collection_milspec_prices.values() if p])),
             )
             
-            # Берем 3 самых дорогих
+            # Take 3 most expensive
             expensive_skins = [(name, price) for name, price in collection_milspec_prices.items() if price and price > 0]
             expensive_skins.sort(key=lambda x: x[1], reverse=True)
 
-            self._logger.info("Дорогих скинов в %s: %s", str(collection_name), int(len(expensive_skins)))
+            self._logger.info("Expensive skins in %s: %s", str(collection_name), int(len(expensive_skins)))
             
             for i in range(min(3, len(expensive_skins))):
                 contract_skins = filler_skins + [expensive_skins[i][0]]
                 
-                # Добиваем еще 2 скинами из той же коллекции если нужно
+                # Fill up with 2 more skins from the same collection if needed
                 if len(contract_skins) < 10:
                     remaining_expensive = [skin[0] for skin in expensive_skins[i+1:i+3]]
                     contract_skins.extend(remaining_expensive[:10-len(contract_skins)])
                 
                 if len(contract_skins) == 10:
                     self._logger.info(
-                        "Пробую контракт для %s с %s",
+                        "Trying contract for %s with %s",
                         str(collection_name),
                         str(expensive_skins[i][0]),
                     )
                     result = self._calculate_contract_result(contract_skins, collection_name)
-                    if result and result.roi_percentage > -50:  # фильтруем очень убыточные
+                    if result and result.roi_percentage > -50:  # filter out very unprofitable ones
                         results.append(result)
-                        self._logger.info("Добавлен результат: ROI %.2f%%", float(result.roi_percentage))
+                        self._logger.info("Added result: ROI %.2f%%", float(result.roi_percentage))
                     else:
-                        self._logger.info("Результат отфильтрован или None")
+                        self._logger.info("Result filtered or None")
 
-        self._logger.info("Всего найдено результатов: %s", int(len(results)))
+        self._logger.info("Total results found: %s", int(len(results)))
         
-        # Сортируем по ROI
+        # Sort by ROI
         results.sort(key=lambda x: x.roi_percentage, reverse=True)
         return results[:10]
     
     def _calculate_contract_result(self, input_skins: List[str], target_collection: str) -> Optional[ContractResult]:
-        """Рассчитать результат с реальными float данными и анализом Wear Leap"""
-        # Получаем цены входных скинов с учетом float
+        """Calculate result with real float data and Wear Leap analysis"""
+        # Get input skin prices with float consideration
         input_prices = {}
         total_cost = 0.0
         
         for skin_name in input_skins:
-            # Ищем самую дешевую цену для каждого скина
+            # Find the cheapest price for each skin
             price_info = self.price_manager.get_skin_price_with_float(skin_name, exclude_stattrak=True)
             if price_info:
                 price, item_float, wear = price_info
@@ -3247,28 +3248,28 @@ class ContractCalculator(_PriceLookupMixin):
         if total_cost == 0:
             return None
         
-        # Анализ Wear Leap
+        # Wear Leap analysis
         wear_leap_info = self.calculate_wear_leap(input_skins)
         
-        # Рассчитываем вероятности
+        # Calculate probabilities
         probabilities = self.calculate_mixed_contract_probabilities(input_skins)
         
-        # Фильтруем вероятности для целевой коллекции
+        # Filter probabilities for target collection
         target_probs = [p for p in probabilities if p.collection == target_collection]
         
         if not target_probs:
             return None
         
-        # Находим самый вероятный и самый ценный исход
+        # Find the most probable and most valuable outcome
         best_outcome = None
         best_expected_value = 0
         
         for prob in target_probs:
-            # Ищем цену с учетом float для целевого скина
+            # Find price with float consideration for target skin
             float_info = self.database.get_float_info_for_skin(prob.skin_name)
             max_float_for_fn = float_info['max_avg_float_for_fn'] if float_info else 0.07
             
-            # Используем Wear Leap информацию для выбора качество
+            # Use Wear Leap information for quality selection
             target_wear = None
             if wear_leap_info.get("can_be_fn"):
                 target_wear = "Factory New"
@@ -3291,13 +3292,13 @@ class ContractCalculator(_PriceLookupMixin):
         if not best_outcome:
             return None
         
-        # Рассчитываем общую ожидаемую прибыль с учетом 15% комиссии
+        # Calculate total expected profit considering 15% fee
         total_expected_value = 0
         for p in probabilities:
             float_info = self.database.get_float_info_for_skin(p.skin_name)
             max_float_for_fn = float_info['max_avg_float_for_fn'] if float_info else 0.07
             
-            # Используем Wear Leap информацию
+            # Use Wear Leap information
             target_wear = None
             if wear_leap_info.get("can_be_fn"):
                 target_wear = "Factory New"
@@ -3314,11 +3315,11 @@ class ContractCalculator(_PriceLookupMixin):
                 price, item_float, wear = price_info
                 total_expected_value += price * p.probability
         
-        # Учитываем комиссию рынка при продаже
+        # Account for market fee on sale
         net_expected_value = total_expected_value * (1 - self.market_fee)
         roi = ((net_expected_value - total_cost) / total_cost) * 100 if total_cost > 0 else 0
         
-        # Float информация
+        # Float information
         float_info = self.database.get_float_info_for_skin(best_outcome.skin_name)
         max_average_float = float_info['max_avg_float_for_fn'] if float_info else 0.07
         
@@ -3331,7 +3332,7 @@ class ContractCalculator(_PriceLookupMixin):
             collection_name=target_collection,
             input_skins=input_skins,
             max_average_float=max_average_float,
-            wear_leap_info=wear_leap_info  # Добавляем информацию о Wear Leap
+            wear_leap_info=wear_leap_info  # Add Wear Leap information
         )
     
     def _compute_cross_collection_contracts(self) -> List[Dict]:
@@ -3431,13 +3432,13 @@ class ContractCalculator(_PriceLookupMixin):
             cache_age = now - self._cross_contracts_cache_ts if self._cross_contracts_cache_ts else None
             refreshing = self._cross_contracts_cache_refreshing
 
-        # Если кэша нет — первый запуск: считаем синхронно (иначе нечего показывать)
+        # If no cache — first run: compute synchronously (otherwise nothing to show)
         if cache is None:
             self.refresh_cross_collection_cache(blocking=True)
             with self._cross_contracts_cache_lock:
                 cache = self._cross_contracts_cache or []
 
-        # Если кэш устарел — обновляем в фоне, но возвращаем текущий кэш сразу
+        # If cache is stale — refresh in background, but return current cache immediately
         if cache_age is None or cache_age > self._cross_contracts_cache_ttl_seconds:
             if not refreshing:
                 self.refresh_cross_collection_cache(blocking=False)
@@ -3486,7 +3487,7 @@ class ContractCalculator(_PriceLookupMixin):
             mode = 'ST' if is_stattrak else 'NON-ST'
             for input_rarity in ["Mil-Spec", "Restricted", "Classified"]:
                 for collection_name in all_collections:
-                    # Оцениваем дешевизну входа по самой дешевой цене в коллекции
+                    # Estimate entry cheapness by the cheapest price in the collection
                     cheapest_inputs = self._get_main_skins(
                         collection_name,
                         count=3,
@@ -3502,7 +3503,7 @@ class ContractCalculator(_PriceLookupMixin):
                     avg_input_price = sum(input_prices) / len(input_prices)
                     est_input_cost = avg_input_price * 10
 
-                    # Ищем самый дорогой выход по каждому wear
+                    # Find the most expensive output for each wear
                     for wear in wears:
                         outputs = self._get_possible_outputs(collection_name, input_rarity, average_float=None, is_stattrak=is_stattrak)
                         if not outputs:
@@ -3777,8 +3778,8 @@ class ContractCalculator(_PriceLookupMixin):
         skipped_over_max_investment = 0
         skipped_prob_fail = 0
 
-        # Бюджет — эвристика. Жесткий лимит часто дает 0 результатов на дорогих коллекциях.
-        # Разрешаем превышение (по умолчанию до 2.5x), но сохраняем метрику utilization.
+        # Budget — heuristic. A strict limit often yields 0 results on expensive collections.
+        # Allow overruns (default up to 2.5x), but track utilization metric.
         max_budget_utilization = 10.0
 
         target_collections = [target_collection] if target_collection is not None else list(all_collections)
@@ -3902,10 +3903,10 @@ class ContractCalculator(_PriceLookupMixin):
                         'min_core_price': None if min_core_price is None else float(min_core_price),
                     })
                     continue
-                # Цена филлеров: эвристика. Слишком жесткий cap дает 0 филлеров почти всегда.
-                # Делаем адаптивный cap: пытаемся от 10% и выше.
-                # Также добавляем разумный минимум в долларах, иначе при очень дешевом core
-                # filler_price_cap становится микроскопическим и пул филлеров пустой.
+                # Filler price: heuristic. Too tight a cap yields 0 fillers almost always.
+                # Use adaptive cap: try from 10% upwards.
+                # Also add a reasonable dollar minimum, otherwise with very cheap core
+                # filler_price_cap becomes microscopic and the filler pool is empty.
                 cap_ratios = [0.10, 0.20, 0.30, 0.40, 0.50, 0.75, 1.00, 1.25]
                 min_abs_filler_cap = 0.25
                 try:
@@ -3914,7 +3915,7 @@ class ContractCalculator(_PriceLookupMixin):
                     max_ratio = 0.75
                 if max_ratio <= 0:
                     max_ratio = 0.75
-                # оставляем возможность поднимать cap до 1.25x, но мягко штрафуем такие варианты по цене
+                # allow raising cap up to 1.25x, but softly penalize such options by price
                 max_ratio = min(max_ratio, 1.25)
                 if max_ratio not in cap_ratios:
                     cap_ratios.append(max_ratio)
@@ -3987,8 +3988,8 @@ class ContractCalculator(_PriceLookupMixin):
                     })
                     continue
 
-                # Важно: филлеры должны быть из ОДНОЙ коллекции, иначе размывается шанс (tickets).
-                # Поэтому перебираем кандидатов-коллекций и берем филлеры только из одной.
+                # Important: fillers must be from ONE collection, otherwise chance is diluted (tickets).
+                # Therefore iterate through collection candidates and take fillers from only one.
                 # Use normalized-float thresholds for candidate screening.
 
                 made = False
@@ -4012,9 +4013,9 @@ class ContractCalculator(_PriceLookupMixin):
                     best_outcomes = None
                     best_total_price = None
 
-                    # Филлеры должны быть из одной коллекции.
-                    # Берём пул дешёвых филлеров, затем внутри пула выбираем минимальный float набор,
-                    # чтобы пройти avg_float контракта.
+                    # Fillers must be from one collection.
+                    # Take a pool of cheap fillers, then within the pool select the minimum float set,
+                    # to pass the contract avg_float threshold.
                     for filler_outcomes_count, _, filler_collection in candidates:
                         pool_size = max(600, int(filler_count) * 80)
                         pool = []
@@ -4028,7 +4029,7 @@ class ContractCalculator(_PriceLookupMixin):
                                 input_rarity,
                                 int(pool_size),
                                 is_stattrak,
-                                # Не режем пул жёстко по float: дальше выберем самый низкий float.
+                                # Don't cut pool strictly by float: we'll pick the lowest float later.
                                 target_float_threshold=None,
                                 max_price=filler_price_cap,
                             )
@@ -4050,7 +4051,7 @@ class ContractCalculator(_PriceLookupMixin):
                             })
                             continue
 
-                        # Пул уже отсортирован по (price, float). Берём самые дешёвые и из них выбираем по float.
+                        # Pool is already sorted by (price, float). Take the cheapest and pick by float.
                         cheap_pool = pool[: int(pool_size)]
                         cheap_pool_sorted = sorted(cheap_pool, key=lambda x: (x.get('float', 1.0), x.get('price', 1e9)))
                         cand = cheap_pool_sorted[: int(filler_count)]
@@ -4060,8 +4061,8 @@ class ContractCalculator(_PriceLookupMixin):
                         if candidate_avg_norm > (target_avg + 1e-9):
                             continue
                         total_price = sum(float(s.get('price') or 0.0) for s in cand)
-                        # Немного штрафуем более высокий cap, чтобы при равной цене
-                        # предпочесть варианты с более дешевыми филлерами.
+                        # Slightly penalize higher cap to prefer options with cheaper fillers
+                        # when prices are equal.
                         if used_cap_ratio is not None:
                             total_price = float(total_price) * (1.0 + (float(used_cap_ratio) * 0.01))
                         if best_total_price is None or total_price < best_total_price:
@@ -4075,8 +4076,8 @@ class ContractCalculator(_PriceLookupMixin):
                         used_collections = [best_collection] if best_collection else []
                         used_outcomes = [best_outcomes] if best_outcomes is not None else []
 
-                    # Fallback: если ни одна коллекция не дала достаточно филлеров,
-                    # используем глобальные умные филлеры по всем коллекциям.
+                    # Fallback: if no single collection gave enough fillers,
+                    # use global smart fillers across all collections.
                     if len(picked_fillers) < int(filler_count):
                         picked_fillers = []
                         for cap_ratio in cap_ratios:
@@ -4226,8 +4227,8 @@ class ContractCalculator(_PriceLookupMixin):
                 results.append(contract_data)
                 made = True
 
-        # Цель режима: при адекватном шансе получить максимум профита с минимальными инвестициями
-        # (чем меньше исходов у свиты, тем меньше размывается шанс цели)
+        # Mode goal: with decent probability, get maximum profit with minimal investment
+        # (the fewer outcomes in the suite, the less the target chance is diluted)
         worthy = [
             r for r in results
             if float(r.get('net_profit') or 0.0) > 0.0 and float(r.get('roi') or 0.0) > 15.0
@@ -4307,7 +4308,7 @@ class ContractCalculator(_PriceLookupMixin):
     
     def _generate_contracts_by_type(self, collections: List[str], is_stattrak: bool, 
                                  max_investment: float = None) -> List[Dict]:
-        """Генерация контрактов для указанного типа скинов"""
+        """Generate contracts for the specified skin type"""
         contracts: List[Dict] = []
         mode = 'ST' if is_stattrak else 'NON-ST'
 
@@ -4346,9 +4347,9 @@ class ContractCalculator(_PriceLookupMixin):
 
                     main_prices = [s.get('price') for s in main_skins if s.get('price')]
                     avg_main_price = (sum(main_prices) / len(main_prices)) if main_prices else None
-                    # Филлеры должны быть заметно дешевле основы.
-                    # Делаем кап мягче, иначе часто невозможно набрать 7-9 штук.
-                    # Филлеры всё равно сортируются по цене и выбираются самыми дешёвыми.
+                    # Fillers must be noticeably cheaper than the core.
+                    # Make the cap softer, otherwise it's often impossible to get 7-9 pieces.
+                    # Fillers are still sorted by price and the cheapest ones are chosen.
                     filler_price_cap = None
 
                     float_targets = [0.15]
@@ -4356,7 +4357,7 @@ class ContractCalculator(_PriceLookupMixin):
                     for target_avg in float_targets:
                         required_filler_threshold = min(target_avg, 1.0)
 
-                        # Филлеры строго из одной коллекции, иначе размывается шанс.
+                        # Fillers strictly from one collection, otherwise chance is diluted.
                         filler_candidates: List[Tuple[int, float, str]] = []
                         for filler_collection in collections:
                             if filler_collection == target_collection:
@@ -4413,9 +4414,9 @@ class ContractCalculator(_PriceLookupMixin):
                         if best_fillers is not None:
                             fillers = best_fillers
 
-                    # Fallback: если не получилось набрать филлеры из одной коллекции,
-                    # пробуем "умные" филлеры по всем коллекциям (шанс будет размываться,
-                    # но это лучше, чем 0 результатов при неполном кэше цен).
+                    # Fallback: if we couldn't get fillers from one collection,
+                    # try "smart" fillers across all collections (chance will be diluted,
+                    # but it's better than 0 results with incomplete price cache).
                     if len(fillers) < filler_count:
                         fillers = self._get_smart_fillers(
                             input_rarity,
@@ -4461,7 +4462,7 @@ class ContractCalculator(_PriceLookupMixin):
 
     def _get_main_skins(self, collection: str, count: int, is_stattrak: bool, rarity: Optional[str] = None,
                         max_float: float = 1.0) -> List[Dict]:
-        """Получение самых дешевых основных скинов из коллекции"""
+        """Get the cheapest main skins from the collection"""
         rarity_norm = self._normalize_rarity(rarity) if rarity else None
         mf = round(float(max_float), 4) if max_float is not None else None
         memo_key = (collection, int(count), bool(is_stattrak), rarity_norm, mf)
@@ -4476,7 +4477,7 @@ class ContractCalculator(_PriceLookupMixin):
             rarity = rarity_norm
             collection_skins = [s for s in collection_skins if self._normalize_rarity(s.rarity) == rarity]
 
-        # Получаем цены и сортируем
+        # Get prices and sort
         priced_skins = []
         for skin in collection_skins:
             price_info = self._get_skin_price_info(
@@ -4557,7 +4558,7 @@ class ContractCalculator(_PriceLookupMixin):
                     )
                 )
 
-            # Филлеры должны быть дешёвыми, а float низким. Приоритет — цена, затем float.
+            # Fillers should be cheap, with low float. Priority — price, then float.
             candidate_skins.sort(key=lambda x: (x.get('price', 1e9), x.get('float', 1.0)))
             return candidate_skins
 
@@ -4585,12 +4586,12 @@ class ContractCalculator(_PriceLookupMixin):
     def _get_smart_fillers(self, rarity: str, count: int, exclude_collection: str,
                          is_stattrak: bool, target_float_threshold: float = 0.20,
                          max_price: Optional[float] = None) -> List[Dict]:
-        """Получение умных филлеров с учетом float"""
+        """Get smart fillers considering float"""
         all_skins = list(self.database.skins.values())
 
         rarity = self._normalize_rarity(rarity)
         
-        # Фильтруем по редкости и типу StatTrak
+        # Filter by rarity and StatTrak type
         candidate_skins = []
         for skin in all_skins:
             if self._normalize_rarity(skin.rarity) != rarity:
@@ -4599,7 +4600,7 @@ class ContractCalculator(_PriceLookupMixin):
             if skin.collection == exclude_collection:
                 continue
             
-            # Получаем цену и float через единый метод
+            # Get price and float through the unified method
             price_info = self._get_skin_price_info(
                 skin.name,
                 max_float=None,
@@ -4626,11 +4627,11 @@ class ContractCalculator(_PriceLookupMixin):
                         )
                     )
         
-        # Сортируем:
-        # 1) минимум outcomes (меньше "размывает" шанс)
-        # 2) максимально низкий float (компенсация плохого float у основных скинов)
-        # 3) максимальная эффективность
-        # 4) цена
+        # Sort:
+        # 1) minimum outcomes (less "dilutes" the chance)
+        # 2) lowest float (compensate for bad float on main skins)
+        # 3) maximum efficiency
+        # 4) price
         candidate_skins.sort(
             key=lambda x: (
                 x.get('outcomes_count', 999999),
@@ -4641,7 +4642,7 @@ class ContractCalculator(_PriceLookupMixin):
         return candidate_skins[:count]
     
     def _calculate_output_probability(self, contract_skins: List[Dict], target_collection: str, is_stattrak: bool) -> float:
-        """Вероятность, что результат будет из target_collection (0..1)."""
+        """Probability that the result will be from target_collection (0..1)."""
         total_skins = len(contract_skins)
         if total_skins <= 0:
             return 0.0
@@ -4670,7 +4671,7 @@ class ContractCalculator(_PriceLookupMixin):
         return tickets_target / total_tickets
     
     def _get_next_grade_skins_count(self, collection: str, input_rarity: str, is_stattrak: bool) -> int:
-        """Количество скинов следующего грейда для данного входного грейда в коллекции."""
+        """Number of next-grade skins for the given input grade in the collection."""
         input_rarity = self._normalize_rarity(input_rarity)
         next_rarity = self._get_next_rarity(input_rarity)
         if not next_rarity:
@@ -4694,7 +4695,7 @@ class ContractCalculator(_PriceLookupMixin):
         return int(count)
 
     def _get_collection_output_float_range(self, collection: str, input_rarity: str, is_stattrak: bool) -> Optional[Tuple[float, float]]:
-        """Возвращает min/max float всех возможных outcomes для коллекции и input_rarity."""
+        """Returns min/max float of all possible outcomes for the collection and input_rarity."""
         input_rarity = self._normalize_rarity(input_rarity)
         next_rarity = self._get_next_rarity(input_rarity)
         if not next_rarity:
@@ -4739,7 +4740,7 @@ class ContractCalculator(_PriceLookupMixin):
         return result
     
     def _calculate_average_float(self, contract_skins: List[Dict]) -> float:
-        """Расчет среднего флоута контракта"""
+        """Calculate average float of the contract"""
         if not contract_skins:
             return 0.0
         
@@ -4760,7 +4761,7 @@ class ContractCalculator(_PriceLookupMixin):
         return total_float / valid_skins if valid_skins > 0 else 0.0
 
     def _calculate_average_normalized_float(self, contract_skins: List[Dict]) -> float:
-        """Средний нормализованный float входа (0..1) с учетом min/max диапазона каждого скина."""
+        """Average normalized input float (0..1) considering min/max range of each skin."""
         if not contract_skins:
             return 0.0
 
@@ -4807,30 +4808,30 @@ class ContractCalculator(_PriceLookupMixin):
         output_max_float: float
     ) -> float:
         """
-        Рассчитывает нормализованный float согласно алгоритму skinsearch/CS2.
+        Calculates normalized float according to the skinsearch/CS2 algorithm.
         
-        Формула: f' = (avg_float - min_f_output) / (max_f_output - min_f_output)
+        Formula: f' = (avg_float - min_f_output) / (max_f_output - min_f_output)
         
-        Где avg_float — среднее абсолютных float входных скинов,
-        а min_f_output/max_f_output — диапазон ВЫХОДНОГО скина.
+        Where avg_float is the average of absolute input skin floats,
+        and min_f_output/max_f_output is the OUTPUT skin's range.
         
         Edge cases:
-        - max_f_output - min_f_output <= 0 → 0.0 (скин с фиксированным float)
-        - avg_float < min_f_output → clamped до 0.0
-        - avg_float > max_f_output → clamped до 1.0
+        - max_f_output - min_f_output <= 0 → 0.0 (skin with fixed float)
+        - avg_float < min_f_output → clamped to 0.0
+        - avg_float > max_f_output → clamped to 1.0
         """
         if not contract_skins:
             return 0.0
         
-        # Расчет среднего абсолютного float
+        # Calculate average absolute float
         avg_float = self._calculate_average_float(contract_skins)
         
-        # Edge case: скин с фиксированным float
+        # Edge case: skin with fixed float
         output_range = output_max_float - output_min_float
         if output_range <= 1e-9:
             return 0.0
         
-        # Нормализация относительно выходного скина
+        # Normalize relative to output skin
         norm = (avg_float - output_min_float) / output_range
         
         # Clamping
@@ -4843,13 +4844,13 @@ class ContractCalculator(_PriceLookupMixin):
 
     def _calculate_weighted_average_normalized_float(self, contract_skins: List[Dict], is_stattrak: bool) -> float:
         """
-        Рассчитывает weighted average normalized float согласно алгоритму skinsearch.
+        Calculates weighted average normalized float according to the skinsearch algorithm.
         
-        Для каждого входного скина:
-        1. Находим все возможные выходные скины из его коллекции
-        2. Определяем min/max float среди этих выходных скинов
-        3. Нормализуем float входного скина относительно этого диапазона
-        4. Взвешиваем по количеству возможных исходов из этой коллекции
+        For each input skin:
+        1. Find all possible output skins from its collection
+        2. Determine min/max float among those output skins
+        3. Normalize input skin float relative to that range
+        4. Weight by the number of possible outcomes from that collection
         """
         if not contract_skins:
             return 0.0
@@ -4874,7 +4875,7 @@ class ContractCalculator(_PriceLookupMixin):
             if not collection:
                 continue
 
-            # Получаем количество возможных исходов из этой коллекции
+            # Get the number of possible outcomes from this collection
             outcomes_count = self._get_next_grade_skins_count(
                 collection,
                 input_rarity,
@@ -4883,7 +4884,7 @@ class ContractCalculator(_PriceLookupMixin):
             if outcomes_count <= 0:
                 continue
 
-            # Нормализуем float входного скина относительно диапазона outcomes этой коллекции.
+            # Normalize input skin float relative to this collection's outcome range.
             skin_name = skin.get('name') or ''
             range_info = self._get_collection_output_float_range(str(collection), input_rarity, is_stattrak)
             if range_info is None:
@@ -4919,7 +4920,7 @@ class ContractCalculator(_PriceLookupMixin):
         return weighted_sum / total_weight
     
     def _determine_best_achievable_wear(self, average_float: float) -> str:
-        """Определение лучшего достижимого качества"""
+        """Determine the best achievable quality"""
         # Align with external calculators: wear is determined by the normalized average float (f')
         # Use the same thresholds as _determine_wear_from_float for consistency
         f = float(average_float)
@@ -4941,7 +4942,7 @@ class ContractCalculator(_PriceLookupMixin):
         available_wears: Optional[List[str]] = None
     ) -> str:
         """
-        Определяет качество (wear) по значению float с учётом доступных wear для скина.
+        Determines the quality (wear) by float value considering available wears for the skin.
 
         CS2 wear ranges (inclusive upper bound):
         FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
@@ -5120,22 +5121,22 @@ class ContractCalculator(_PriceLookupMixin):
     
     def _calculate_contract_profit(self, contract_skins: List[Dict], target_collection: str,
                                 is_stattrak: bool) -> Dict:
-        """Расчет профита контракта"""
-        # Стоимость входных скинов
+        """Calculate contract profit"""
+        # Cost of input skins
         input_cost = sum(skin['price'] for skin in contract_skins)
 
-        # Вероятность, что результат будет из целевой коллекции (система билетов)
+        # Probability that the result will be from the target collection (ticket system)
         output_probability = self._calculate_output_probability(
             contract_skins,
             target_collection,
             is_stattrak=is_stattrak,
         )
 
-        # Расчет среднего флоута входа
+        # Calculate average input float
         avg_float = self._calculate_average_float(contract_skins)
         avg_norm_float = self._calculate_average_float(contract_skins)
 
-        # Считаем все возможные исходы с индивидуальным out_float/wear/price
+        # Count all possible outcomes with individual out_float/wear/price
         outcomes = self.calculate_contract_outcomes_details(contract_skins, is_stattrak=is_stattrak)
 
         best_outcome_name = None
@@ -5164,12 +5165,12 @@ class ContractCalculator(_PriceLookupMixin):
         if bool(self._multisource_net_pricing):
             ev_after_fee = float(gross_ev)
         else:
-            # EV с учётом комиссии рынка (market.csgo.com ~7%, не Steam 15%)
+            # EV accounting for market fee (market.csgo.com ~7%, not Steam 15%)
             ev_after_fee = gross_ev * (1.0 - float(self.market_fee))
         net_profit = ev_after_fee - input_cost
         roi = (net_profit / input_cost) * 100 if input_cost > 0 else 0
 
-        # Шаг 4: Определяем achievable_wear из outcomes (worst wear)
+        # Step 4: Determine achievable_wear from outcomes (worst wear)
         if outcomes:
             _wear_order = ['Factory New', 'Minimal Wear', 'Field-Tested', 'Well-Worn', 'Battle-Scarred']
             _worst_idx = 0
@@ -5209,12 +5210,12 @@ class ContractCalculator(_PriceLookupMixin):
     }
 
     def _get_possible_outputs(self, collection: str, input_rarity: str, average_float: Optional[float], is_stattrak: bool) -> List[Dict]:
-        """Получение возможных выходных скинов для конкретной коллекции и входного грейда.
+        """Get possible output skins for a specific collection and input grade.
 
-        Если average_float задан, определяется лучшее достижимое качество через
-        _determine_best_achievable_wear и скины фильтруются: остаются только те,
-        чей диапазон [min_float, max_float] пересекается с диапазоном этого качества.
-        Если average_float is None — возвращаются все скины следующего грейда.
+        If average_float is set, determines the best achievable quality via
+        _determine_best_achievable_wear and skins are filtered: only those
+        whose [min_float, max_float] range overlaps with that quality range remain.
+        If average_float is None — returns all skins of the next grade.
         """
         input_rarity = self._normalize_rarity(input_rarity)
         next_rarity = self._get_next_rarity(input_rarity)
@@ -5257,20 +5258,20 @@ class ContractCalculator(_PriceLookupMixin):
     
     def find_cheap_fillers(self, rarity: str = None, max_float: float = None, limit: int = 20) -> Dict[str, List[Dict]]:
         """
-        Поиск дешевых филлеров для контрактов
+        Find cheap fillers for contracts
         
         Args:
-            rarity: уровень редкости (None для всех)
-            max_float: максимальный float (None для всех, по умолчанию None)
-            limit: количество результатов
+            rarity: rarity level (None for all)
+            max_float: maximum float (None for all, default None)
+            limit: number of results
             
         Returns:
-            Dict с топовыми дешевыми скинами по редкостям
+            Dict with top cheap skins by rarity
         """
-        # Получаем все скины из базы
+        # Get all skins from database
         all_skins = list(self.database.skins.values())
         
-        # Группируем по редкости
+        # Group by rarity
         rarity_groups = defaultdict(list)
         for skin in all_skins:
             rarity_groups[skin.rarity].append(skin)
@@ -5284,10 +5285,10 @@ class ContractCalculator(_PriceLookupMixin):
             cheap_skins = []
             
             for skin in skins:
-                # Ищем цену без строгого фильтра по float для начала
+                # Look up price without strict float filter initially
                 price_info = self.price_manager.get_skin_price_with_float(
                     skin.name, 
-                    max_float=max_float,  # Может быть None для всех
+                    max_float=max_float,  # Can be None for all
                     exclude_stattrak=True
                 )
                 
@@ -5302,7 +5303,7 @@ class ContractCalculator(_PriceLookupMixin):
                         'rarity': skin.rarity
                     })
             
-            # Сортируем по цене и берем топ
+            # Sort by price and take top
             cheap_skins.sort(key=lambda x: x['price'])
             results[rarity_name] = cheap_skins[:limit]
         
@@ -5310,46 +5311,46 @@ class ContractCalculator(_PriceLookupMixin):
     
     def find_profitable_contracts(self, collection_name: str = None, max_investment: float = 50.0) -> List[ContractResult]:
         """
-        Поиск прибыльных контрактов для указанной коллекции или всех коллекций
+        Search for profitable contracts for a specific collection or all collections
         
         Args:
-            collection_name: название коллекции (None для всех)
-            max_investment: максимальные инвестиции в контракт
+            collection_name: collection name (None for all)
+            max_investment: maximum investment per contract
             
         Returns:
-            Список прибыльных контрактов, отсортированный по ROI
+            List of profitable contracts, sorted by ROI
         """
         results = []
         
         if collection_name:
-            # Поиск для конкретной коллекции
+            # Search for a specific collection
             collection = self.database.get_collection(collection_name)
             if not collection:
                 return results
             
-            # Получаем Mil-Spec скины из коллекции
+            # Get Mil-Spec skins from the collection
             milspec_skins = self.database.get_skins_by_rarity("Mil-Spec", collection_name)
             if len(milspec_skins) < 10:
                 return results
             
             results = self._find_contracts_for_collection(collection_name, milspec_skins, max_investment)
         else:
-            # Поиск по всем коллекциям
+            # Search across all collections
             milspec_collections = self.database.get_collections_with_rarity("Mil-Spec")
             
             for coll_name in milspec_collections:
                 coll_results = self.find_profitable_contracts(coll_name, max_investment)
                 results.extend(coll_results)
         
-        # Сортируем по ROI
+        # Sort by ROI
         results.sort(key=lambda x: x.roi_percentage, reverse=True)
         return results
     
     def _find_contracts_for_collection(self, collection_name: str, milspec_skins: List[SkinData], max_investment: float) -> List[ContractResult]:
-        """Поиск контрактов для конкретной коллекции с реальными float данными"""
+        """Search contracts for a specific collection with real float data"""
         results = []
         
-        # Получаем цены на Mil-Spec скины с учетом float
+        # Get prices for Mil-Spec skins considering float
         milspec_names = [skin.name for skin in milspec_skins]
         milspec_prices = {}
         
@@ -5364,18 +5365,18 @@ class ContractCalculator(_PriceLookupMixin):
         if len(priced_milspec) < 10:
             return results
         
-        # Сортируем по цене
+        # Sort by price
         priced_milspec.sort(key=lambda x: x[1])
         
-        # Берем разные комбинации
-        for i in range(min(5, len(priced_milspec))):  # до 5 дорогих скинов
+        # Take different combinations
+        for i in range(min(5, len(priced_milspec))):  # up to 5 expensive skins
             expensive_skin = priced_milspec[i][0]
             
-            # Создаем контракт: 7 самых дешевых + 3 дорогих
+            # Create contract: 7 cheapest + 3 expensive
             filler_skins = [priced_milspec[j][0] for j in range(min(7, len(priced_milspec)))]
             contract_skins = filler_skins + [expensive_skin]
             
-            # Добиваем до 10 скинов
+            # Fill up to 10 skins
             if len(contract_skins) < 10:
                 remaining = [priced_milspec[j][0] for j in range(7, min(10, len(priced_milspec)))]
                 contract_skins.extend(remaining[:10-len(contract_skins)])
@@ -5389,12 +5390,12 @@ class ContractCalculator(_PriceLookupMixin):
     
     def calculate_break_even_price(self, skin_name: str, probability: float) -> float:
         """
-        Рассчитать минимальную цену для безубыточности
+        Calculate the minimum price for break-even
         """
-        # Для безубыточности: price * probability >= investment_cost
-        # investment_cost обычно ~10 * average_input_price
-        # Это упрощенный расчет, в реальности нужно знать конкретные входные скины
-        average_input_price = 2.0  # более реалистичная средняя цена для Mil-Spec
+        # For break-even: price * probability >= investment_cost
+        # investment_cost is usually ~10 * average_input_price
+        # This is a simplified calculation; in reality you need to know the specific input skins
+        average_input_price = 2.0  # more realistic average price for Mil-Spec
         investment_cost = 10 * average_input_price
         
         break_even_price = investment_cost / probability if probability > 0 else float('inf')

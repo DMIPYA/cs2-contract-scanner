@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SkinData:
-    """Полные данные о скине"""
+    """Full skin data"""
     id: str
     name: str
     weapon: str
@@ -26,14 +26,14 @@ class SkinData:
 
 @dataclass
 class CollectionData:
-    """Данные о коллекции"""
+    """Collection data"""
     id: str
     name: str
     skins: List[SkinData]
 
 
 class CS2Database:
-    """База данных коллекций и скинов CS2 на основе локальных JSON файлов"""
+    """CS2 collections and skins database based on local JSON files"""
     
     def __init__(self, collections_file: str = "collections.json", skins_file: str = "skins.json"):
         self.collections_file = collections_file
@@ -43,7 +43,7 @@ class CS2Database:
         self.skins_by_name: Dict[str, SkinData] = {}  # exact skin_name -> skin_data
         self.skin_to_collection: Dict[str, str] = {}  # skin_name -> collection_name
         
-        # Маппинг rarity_id в простые названия
+        # Mapping rarity_id to simple names
         self.rarity_mapping = {
             "rarity_common": "Consumer",
             "rarity_uncommon": "Industrial", 
@@ -53,7 +53,7 @@ class CS2Database:
             "rarity_ancient": "Covert",
             "rarity_ancient_weapon": "Covert",
             "rarity_immortal": "Extraordinary",
-            # Добавляем маппинг для полных названий
+            # Add mapping for full names
             "Consumer Grade": "Consumer",
             "Industrial Grade": "Industrial",
             "Mil-Spec Grade": "Mil-Spec",
@@ -63,55 +63,55 @@ class CS2Database:
             "Extraordinary": "Extraordinary"
         }
         
-        # Обратный маппинг для поиска
+        # Reverse mapping for lookup
         self.reverse_rarity_mapping = {v: k for k, v in self.rarity_mapping.items()}
     
     def load_data(self) -> bool:
-        """Загрузка данных из локальных JSON файлов"""
+        """Load data from local JSON files"""
         try:
-            # Загрузка коллекций
+            # Loading collections
             if not os.path.exists(self.collections_file):
-                logger.error("Файл %s не найден", str(self.collections_file))
+                logger.error("File %s not found", str(self.collections_file))
                 return False
                 
             with open(self.collections_file, 'r', encoding='utf-8') as f:
                 collections_data = json.load(f)
             
-            # Загрузка скинов
+            # Loading skins
             if not os.path.exists(self.skins_file):
-                logger.error("Файл %s не найден", str(self.skins_file))
+                logger.error("File %s not found", str(self.skins_file))
                 return False
                 
             with open(self.skins_file, 'r', encoding='utf-8') as f:
                 skins_data = json.load(f)
             
             self._parse_data(collections_data, skins_data)
-            logger.info("Загружено %s коллекций и %s скинов", int(len(self.collections)), int(len(self.skins)))
+            logger.info("Loaded %s collections and %s skins", int(len(self.collections)), int(len(self.skins)))
             return True
             
         except Exception as e:
-            logger.error("Ошибка загрузки данных: %s", str(e))
+            logger.error("Data loading error: %s", str(e))
             return False
     
     def _parse_data(self, collections_data: List[dict], skins_data: List[dict]):
-        """Парсинг данных о коллекциях и скинах с фильтрацией только оружия"""
+        """Parse collection and skin data filtering only weapons"""
         self.collections.clear()
         self.skins.clear()
         self.skins_by_name.clear()
         self.skin_to_collection.clear()
         
-        # Создаем маппинг ID скинов -> полные данные
+        # Create mapping of skin IDs -> full data
         skin_id_to_data = {}
         for skin_info in skins_data:
-            # Проверяем наличие необходимых полей
+            # Check for required fields
             if not skin_info.get("id") or not skin_info.get("name"):
                 continue
             
-            # Фильтруем только оружие (исключаем перчатки, наклейки, нашивки, чармы, граффити)
+            # Filter only weapons (exclude gloves, stickers, patches, charms, graffiti)
             category = skin_info.get("category", {})
             category_name = category.get("name", "").lower() if category else ""
             
-            # Исключаем нежелательные категории
+            # Exclude unwanted categories
             excluded_categories = [
                 "gloves", "stickers", "patches", "charms", "graffiti", 
                 "musical kits", "agents", "keys", "cases", "tools"
@@ -120,7 +120,7 @@ class CS2Database:
             if any(excluded in category_name for excluded in excluded_categories):
                 continue
             
-            # Проверяем, что это оружие (weapon должен существовать и не быть пустым)
+            # Check that it is a weapon (weapon must exist and not be empty)
             weapon_data = skin_info.get("weapon", {})
             if not weapon_data or not weapon_data.get("name"):
                 continue
@@ -145,11 +145,11 @@ class CS2Database:
             self.skins_by_name[skin_data.name] = skin_data
             skin_id_to_data[skin_data.id] = skin_data
         
-        # Парсим коллекции с фильтрацией
+        # Parse collections with filtering
         for collection_info in collections_data:
             collection_name = collection_info.get("name", "")
             
-            # Фильтруем коллекции: только те, что содержат "Collection" или "Case"
+            # Filter collections: only those containing "Collection" or "Case"
             if not ("collection" in collection_name.lower() or "case" in collection_name.lower()):
                 continue
             
@@ -159,7 +159,7 @@ class CS2Database:
                 skins=[]
             )
             
-            # Добавляем скины из поля contains
+            # Add skins from contains field
             for skin_ref in collection_info.get("contains", []):
                 skin_id = skin_ref.get("id")
                 if skin_id and skin_id in skin_id_to_data:
@@ -168,16 +168,16 @@ class CS2Database:
                     collection.skins.append(skin_data)
                     self.skin_to_collection[skin_data.name] = collection.name
             
-            # Добавляем коллекцию только если в ней есть скины
+            # Add collection only if it has skins
             if collection.skins:
                 self.collections[collection.name] = collection
     
     def get_collection(self, name: str) -> Optional[CollectionData]:
-        """Получить коллекцию по имени"""
+        """Get a collection by name"""
         return self.collections.get(name)
     
     def get_skin_by_name(self, name: str) -> Optional[SkinData]:
-        """Получить скин по имени"""
+        """Get a skin by name"""
         n = str(name or '').strip()
         if not n:
             return None
@@ -196,11 +196,11 @@ class CS2Database:
         return None
     
     def get_skin_collection(self, skin_name: str) -> Optional[str]:
-        """Получить название коллекции по имени скина"""
+        """Get collection name by skin name"""
         return self.skin_to_collection.get(skin_name)
     
     def get_skins_by_rarity(self, rarity: str, collection_name: str = None) -> List[SkinData]:
-        """Получить скины указанного грейда"""
+        """Get skins of the specified rarity"""
         result = []
         
         if collection_name:
@@ -213,11 +213,11 @@ class CS2Database:
         return result
     
     def _normalize_rarity(self, rarity_name: str) -> str:
-        """Нормализация названия грейда"""
+        """Normalize rarity name"""
         return self.rarity_mapping.get(rarity_name, rarity_name)
     
     def get_higher_rarity_skins(self, collection_name: str, current_rarity: str) -> List[SkinData]:
-        """Получить скины более высокого грейда в той же коллекции"""
+        """Get skins of higher rarity in the same collection"""
         collection = self.get_collection(collection_name)
         if not collection:
             return []
@@ -233,7 +233,7 @@ class CS2Database:
         return higher_skins
     
     def _get_rarity_level(self, rarity: str) -> int:
-        """Получить числовой уровень грейда"""
+        """Get numeric rarity level"""
         levels = {
             "Consumer": 0,
             "Industrial": 1,
@@ -245,17 +245,17 @@ class CS2Database:
         return levels.get(rarity, 0)
     
     def get_collection_skins(self, collection_name: str) -> List[SkinData]:
-        """Получение скинов конкретной коллекции"""
+        """Get skins of a specific collection"""
         if collection_name in self.collections:
             return self.collections[collection_name].skins
         return []
     
     def list_collections(self) -> List[str]:
-        """Получить список всех коллекций"""
+        """Get list of all collections"""
         return list(self.collections.keys())
     
     def get_collections_with_rarity(self, rarity: str) -> List[str]:
-        """Получить коллекции, содержащие скины указанного грейда"""
+        """Get collections containing skins of the specified rarity"""
         result = []
         for collection_name, collection in self.collections.items():
             has_rarity = any(self._normalize_rarity(skin.rarity) == rarity for skin in collection.skins)
@@ -264,7 +264,7 @@ class CS2Database:
         return result
     
     def get_skin_float_info(self, skin_name: str) -> Optional[tuple]:
-        """Получить информацию о float для скина"""
+        """Get float information for a skin"""
         skin = self.get_skin_by_name(skin_name)
         if skin:
             return (skin.min_float, skin.max_float)
@@ -303,41 +303,41 @@ class CS2Database:
     
     def calculate_max_average_float_for_fn(self, target_skin_name: str) -> float:
         """
-        Рассчитать максимальный средний float для получения Factory New на основе реальных данных
+        Calculate the maximum average float to achieve Factory New based on real data
         
         Args:
-            target_skin_name: имя целевого скина
+            target_skin_name: name of the target skin
             
         Returns:
-            Максимальный средний float для получения Factory New
+            Maximum average float to achieve Factory New
         """
         skin = self.get_skin_by_name(target_skin_name)
         if not skin:
-            return 0.07  # значение по умолчанию
+            return 0.07  # default value
         
         min_float, max_float = skin.min_float, skin.max_float
         
-        # Для Factory New нужен float < 0.07 (эксклюзивная граница)
-        # Но учитываем реальные границы скина
+        # For Factory New, float must be < 0.07 (exclusive boundary)
+        # But account for the skin's actual boundaries
         fn_threshold = 0.07
         
-        # Если скин не может быть Factory New (min_float >= 0.07)
+        # If the skin cannot be Factory New (min_float >= 0.07)
         if min_float >= fn_threshold:
-            return min_float  # возвращаем минимально возможный
+            return min_float  # return the minimum possible
         
-        # Если скин всегда будет Factory New (max_float < 0.07)
+        # If the skin will always be Factory New (max_float < 0.07)
         if max_float < fn_threshold:
             return max_float
         
-        # В остальных случаях - порог для FN
+        # In other cases - threshold for FN
         return fn_threshold
     
     def get_float_info_for_skin(self, skin_name: str) -> Optional[dict]:
         """
-        Получить полную информацию о float для скина
+        Get complete float information for a skin
         
         Returns:
-            dict с min_float, max_float, can_be_fn, max_avg_float_for_fn
+            dict with min_float, max_float, can_be_fn, max_avg_float_for_fn
         """
         skin = self.get_skin_by_name(skin_name)
         if not skin:
@@ -357,23 +357,23 @@ class CS2Database:
         }
     
     def debug_info(self):
-        """Вывод отладочной информации"""
-        print(f"Загружено коллекций: {len(self.collections)}")
-        print(f"Загружено скинов: {len(self.skins)}")
+        """Print debug information"""
+        print(f"Collections loaded: {len(self.collections)}")
+        print(f"Skins loaded: {len(self.skins)}")
         
-        # Статистика по грейдам
+        # Rarity statistics
         rarity_stats = defaultdict(int)
         for skin in self.skins.values():
             rarity = self._normalize_rarity(skin.rarity)
             rarity_stats[rarity] += 1
         
-        print("Распределение по грейдам:")
+        print("Rarity distribution:")
         for rarity, count in sorted(rarity_stats.items()):
             print(f"  {rarity}: {count}")
         
-        # Коллекции с Mil-Spec
+        # Collections with Mil-Spec
         milspec_collections = self.get_collections_with_rarity("Mil-Spec")
-        print(f"Коллекций с Mil-Spec: {len(milspec_collections)}")
-        for collection in milspec_collections[:5]:  # первые 5
+        print(f"Collections with Mil-Spec: {len(milspec_collections)}")
+        for collection in milspec_collections[:5]:  # first 5
             milspec_count = len(self.get_skins_by_rarity("Mil-Spec", collection))
             print(f"  {collection}: {milspec_count} Mil-Spec")

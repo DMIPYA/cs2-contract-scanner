@@ -1,8 +1,8 @@
 import os
 import time
 
-# Версия кэша для инвалидации при изменении алгоритма расчёта wear
-# Увеличивать при каждом изменении логики расчёта float/wear
+# Cache version for invalidation when wear calculation algorithm changes
+# Increment on every change to float/wear calculation logic
 MARKET_CACHE_VERSION = 4
 import json
 import gzip
@@ -33,7 +33,7 @@ _sales_profile_lock = threading.Lock()
 
 
 class MarketCSGOClient:
-    """Клиент для работы с Market.CSGO Full Export API с поддержкой float данных"""
+    """Client for Market.CSGO Full Export API with float data support"""
     
     def __init__(self):
         load_dotenv()
@@ -42,7 +42,7 @@ class MarketCSGOClient:
         self.v2_full_history_all_url = os.getenv('MARKET_CSGO_FULL_HISTORY_ALL_URL', 'https://market.csgo.com/api/v2/full-history/all.json')
         self.v2_full_history_item_url_tpl = os.getenv('MARKET_CSGO_FULL_HISTORY_ITEM_URL_TPL', 'https://market.csgo.com/api/v2/full-history/{item_id}.json')
         self.base_url = 'https://market.csgo.com/api/full-export'
-        self.cache_ttl = int(os.getenv('CACHE_TTL', 300))  # 5 минут по умолчанию
+        self.cache_ttl = int(os.getenv('CACHE_TTL', 300))  # 5 minutes by default
         self.files_to_load = int(os.getenv('FULL_EXPORT_FILES_TO_LOAD', '0'))
         self.price_source_mode = str(os.getenv('PRICE_SOURCE_MODE', 'v1_only') or 'v1_only').strip().lower()
         self.strict_input_float = str(os.getenv('STRICT_INPUT_FLOAT', '1') or '1').strip().lower() not in {'0', 'false', 'no', 'off'}
@@ -52,7 +52,7 @@ class MarketCSGOClient:
         except Exception:
             self.full_export_workers = 3
 
-        self.sales_history_ttl_seconds = int(os.getenv('MARKET_SALES_HISTORY_TTL', '3600'))  # 1 час по умолчанию
+        self.sales_history_ttl_seconds = int(os.getenv('MARKET_SALES_HISTORY_TTL', '3600'))  # 1 hour by default
 
         self._sales_prof_lock = threading.Lock()
         self._sales_prof = {
@@ -64,7 +64,7 @@ class MarketCSGOClient:
         }
 
         self.disk_cache_path = os.getenv('MARKET_PRICES_DISK_CACHE', 'market_prices_cache.pkl.gz')
-        self.disk_cache_ttl = int(os.getenv('MARKET_PRICES_DISK_CACHE_TTL', '21600'))  # 6 часов по умолчанию
+        self.disk_cache_ttl = int(os.getenv('MARKET_PRICES_DISK_CACHE_TTL', '21600'))  # 6 hours by default
 
         self.request_min_interval_seconds = float(os.getenv('MARKET_REQUEST_MIN_INTERVAL', '0.10'))
         self.full_export_file_timeout = int(os.getenv('FULL_EXPORT_FILE_TIMEOUT', '20'))
@@ -83,7 +83,7 @@ class MarketCSGOClient:
         except Exception:
             self.http_backoff_base_seconds = 0.5
         
-        # Расширенный кэш: {market_hash_name: [(price, float, wear), ...]}
+        # Extended cache: {market_hash_name: [(price, float, wear), ...]}
         self._prices_cache: Dict[str, List[Tuple[float, Optional[float], str, bool]]] = {}
         self._prices_cache_lock = threading.RLock()
         self._last_update_time: float = 0
@@ -92,8 +92,8 @@ class MarketCSGOClient:
         self._total_lots_analyzed: int = 0
         self._cache_source: str = 'unknown'
 
-        # Кэш для ускорения prefix-match fallback (variant -> list[cache_key])
-        # Важно: очищать при обновлении _prices_cache
+        # Cache for speeding up prefix-match fallback (variant -> list[cache_key])
+        # Important: clear when _prices_cache is updated
         self._prefix_match_cache: Dict[str, List[str]] = {}
         self._prefix_match_cache_lock = threading.RLock()
 
@@ -108,16 +108,16 @@ class MarketCSGOClient:
             'User-Agent': 'CS2-Contract-Analyzer/1.0'
         })
         
-        # Добавляем API ключ если он есть
+        # Add API key if present
         if self.api_key:
             self._session.headers.update({
                 'Authorization': f'Bearer {self.api_key}'
             })
 
-        # query param формат ключа (для MarketCSGO это более совместимо)
+        # query param key format (more compatible for MarketCSGO)
         self._api_key_params = {'key': self.api_key} if self.api_key else {}
 
-        # Возможные качества скинов
+        # Possible skin wears
         self.wear_levels = [
             "Factory New",
             "Minimal Wear",
@@ -344,7 +344,7 @@ class MarketCSGOClient:
                 meta = obj.get('meta') if isinstance(obj.get('meta'), dict) else {}
                 source = str(meta.get('source') or 'unknown')
                 cache_version = int(meta.get('version') or 0)
-                # Шаг 8: инвалидация кэша при изменении версии алгоритма
+                # Step 8: cache invalidation when algorithm version changes
                 if cache_version != MARKET_CACHE_VERSION:
                     logger.warning('Disk cache rejected: version mismatch (cache=%s current=%s)', cache_version, MARKET_CACHE_VERSION)
                     return None
@@ -409,7 +409,7 @@ class MarketCSGOClient:
                 'meta': {
                     'source': str(self._cache_source or 'unknown'),
                     'saved_ts': time.time(),
-                    'version': MARKET_CACHE_VERSION,  # Шаг 8: версия для инвалидации кэша
+                    'version': MARKET_CACHE_VERSION,  # Step 8: version for cache invalidation
                 },
                 'cache': cache_obj,
             }
@@ -472,7 +472,7 @@ class MarketCSGOClient:
             return list(cached)
 
         matches: List[str] = []
-        # Сканы по всем ключам дорогие, но делаем их один раз на variant
+        # Scanning all keys is expensive, but we do it once per variant
         for cache_name in cache_snapshot.keys():
             try:
                 if cache_name.startswith(v) or v.startswith(cache_name):
@@ -485,8 +485,8 @@ class MarketCSGOClient:
         return list(matches)
 
     def _load_prices_v2(self) -> Optional[Dict[str, List[Tuple[float, Optional[float], str, bool]]]]:
-        """Быстрая загрузка цен одним запросом через v2/prices."""
-        # Иногда market.csgo.com рвет TLS-сессию (SSLEOFError). Принудительно закрываем соединение.
+        """Fast price loading in a single request via v2/prices."""
+        # Sometimes market.csgo.com tears down TLS session (SSLEOFError). Force close connection.
         data = self._request_json(
             self.v2_prices_url,
             timeout=60,
@@ -501,18 +501,18 @@ class MarketCSGOClient:
         if not raw_items:
             return None
 
-        # API может возвращать items как список [{market_hash_name, price, ...}]
-        # или как словарь {name: {price: ...}} — обрабатываем оба варианта.
+        # API may return items as a list [{market_hash_name, price, ...}]
+        # or as a dict {name: {price: ...}} — handle both variants.
         if isinstance(raw_items, list):
             items_iter = raw_items
         elif isinstance(raw_items, dict):
-            # Конвертируем старый формат в единый вид
+            # Convert old format to unified form
             items_iter = [
                 {'market_hash_name': k, 'price': v.get('price') if isinstance(v, dict) else v}
                 for k, v in raw_items.items()
             ]
         else:
-            logger.warning("v2 prices: неизвестный формат items (%s)", type(raw_items))
+            logger.warning("v2 prices: unknown items format (%s)", type(raw_items))
             return None
 
         new_cache: Dict[str, List[Tuple[float, Optional[float], str, bool]]] = {}
@@ -526,7 +526,7 @@ class MarketCSGOClient:
             if not item_name:
                 continue
 
-            # Цена может быть строкой "0.34" или числом
+            # Price may be a string "0.34" or a number
             price_raw = item_data.get('price')
             if price_raw is None:
                 continue
@@ -539,18 +539,18 @@ class MarketCSGOClient:
             if price <= 0:
                 continue
 
-            # Souvenir не нужен для trade-up
+            # Souvenir not needed for trade-up
             if 'souvenir' in item_name.lower():
                 continue
 
-            # Выкидываем явно не-скины (стикеры/кейсы/капсулы/агенты и т.п.)
-            # Для оружейных скинов почти всегда есть " | " между оружием и паттерном
+            # Filter out non-skins (stickers/cases/capsules/agents etc.)
+            # Weapon skins almost always have " | " between weapon and pattern
             if ' | ' not in item_name:
                 continue
 
-            # volume = количество активных ордеров на продажу.
-            # Сохраняем min(volume, 50) копий, чтобы get_listings возвращала
-            # реалистичную глубину ордербука и liquidity-дисконт считался верно.
+            # volume = number of active sell orders.
+            # Store min(volume, 50) copies so get_listings returns
+            # realistic orderbook depth and liquidity-discount is calculated correctly.
             try:
                 volume = max(1, min(int(str(item_data.get('volume') or '1').strip()), 50))
             except Exception:
@@ -566,12 +566,12 @@ class MarketCSGOClient:
             if normalized_name not in new_cache:
                 new_cache[normalized_name] = []
 
-            # Используем верхнюю границу wear диапазона как приблизительный float.
-            # Это важно для корректной нормализации: midpoint (0.11 для MW) на скинах
-            # с нестандартным min_float (например 0.06) даёт слишком низкую норму и
-            # приводит к неправильному определению качества выходных скинов.
-            # Верхняя граница гарантирует что нормализованное значение соответствует
-            # реальному максимально возможному float для данного wear.
+            # Use upper bound of wear range as approximate float.
+            # This is important for correct normalization: midpoint (0.11 for MW) on skins
+            # with non-standard min_float (e.g. 0.06) gives too low a norm and
+            # leads to incorrect determination of output skin wear.
+            # Upper bound ensures normalized value corresponds to
+            # the real maximum possible float for this wear.
             _WEAR_FLOAT_MAX = {
                 'Factory New':   0.0699,
                 'Minimal Wear':  0.1499,
@@ -588,16 +588,16 @@ class MarketCSGOClient:
         if not new_cache:
             return None
 
-        logger.info(f"v2 prices: загружено {len(new_cache)} уникальных предметов")
-        logger.info(f"v2 prices: всего записей {total_lots}")
+        logger.info(f"v2 prices: loaded {len(new_cache)} unique items")
+        logger.info(f"v2 prices: total entries {total_lots}")
         return new_cache
     
     def _is_cache_valid(self) -> bool:
-        """Проверка актуальности кэша"""
+        """Check cache validity"""
         return (time.time() - self._last_update_time) < self.cache_ttl
     
     def _rate_limit(self):
-        """Ограничение частоты запросов (thread-safe)."""
+        """Rate-limit requests (thread-safe)."""
         with self._rate_limit_lock:
             current_time = time.time()
             min_interval = float(self.request_min_interval_seconds) if self.request_min_interval_seconds is not None else 0.1
@@ -609,18 +609,18 @@ class MarketCSGOClient:
             self._last_request_time = time.time()
     
     def _normalize_skin_name(self, skin_name: str) -> str:
-        """Агрессивная нормализация имени скина для максимального маппинга"""
+        """Aggressive skin name normalization for maximum matching"""
         if not skin_name:
             return skin_name
         
-        # Удаляем артефакты и приводим к нижнему регистру
+        # Remove artifacts and convert to lowercase
         normalized = skin_name.lower().strip()
         
-        # Удаляем лишние пробелы и символы
+        # Remove extra spaces and characters
         normalized = re.sub(r'\s+', ' ', normalized)
         normalized = re.sub(r'[^\w\s\|\-★]', '', normalized)
         
-        # Удаляем суффиксы качества
+        # Remove wear suffixes
         quality_suffixes = [
             r'\s*\(factory new\)',
             r'\s*\(minimal wear\)',
@@ -637,7 +637,7 @@ class MarketCSGOClient:
         for suffix in quality_suffixes:
             normalized = re.sub(suffix, '', normalized, flags=re.IGNORECASE)
 
-        # В некоторых выгрузках качество идёт без скобок в конце строки
+        # In some exports, wear appears without parentheses at end of string
         normalized = re.sub(
             r'\s+(factory new|minimal wear|field-tested|well-worn|battle-scarred)\s*$',
             '',
@@ -645,42 +645,42 @@ class MarketCSGOClient:
             flags=re.IGNORECASE,
         )
         
-        # Удаляем StatTrak и ★
+        # Remove StatTrak and ★
         normalized = re.sub(r'stattrak™?\s*', '', normalized, flags=re.IGNORECASE)
         normalized = re.sub(r'★\s*', '', normalized, flags=re.IGNORECASE)
         
         return normalized.strip()
     
     def _generate_search_variants(self, skin_name: str) -> List[str]:
-        """Генерирует варианты для поиска скина"""
+        """Generate variants for skin search"""
         variants = []
         base_name = self._normalize_skin_name(skin_name)
         
-        # Базовый вариант
+        # Base variant
         variants.append(base_name)
         
-        # Вариант с заменой | на ::
+        # Variant replacing | with ::
         if '|' in base_name:
             variants.append(base_name.replace('|', '::'))
         
-        # Вариант без | совсем
+        # Variant without | at all
         if '|' in base_name:
             variants.append(base_name.replace('|', ''))
         
-        # Вариант с заменой пробелов на _
+        # Variant replacing spaces with _
         variants.append(base_name.replace(' ', '_'))
         
-        # Вариант с заменой - на _
+        # Variant replacing - with _
         variants.append(base_name.replace('-', '_'))
         
-        # Вариант с заменой | на пробел
+        # Variant replacing | with space
         if '|' in base_name:
             variants.append(base_name.replace('|', ' '))
         
-        # Вариант с несколькими пробелами на один
+        # Variant with multiple spaces reduced to one
         variants.append(re.sub(r'\s+', ' ', base_name))
 
-        # Приводим все варианты к единому виду (один пробел, trim)
+        # Normalize all variants to a uniform form (single space, trimmed)
         cleaned: List[str] = []
         for v in variants:
             if not v:
@@ -689,7 +689,7 @@ class MarketCSGOClient:
             if v2:
                 cleaned.append(v2)
 
-        return list(set(cleaned))  # Удаляем дубликаты
+        return list(set(cleaned))  # Remove duplicates
     
     def _fetch_full_export_manifest(self) -> List[str]:
         data = self._request_json(
@@ -799,9 +799,9 @@ class MarketCSGOClient:
         return (start_cache, int(total_lots))
 
     def load_prices(self, force_refresh: bool = False) -> bool:
-        """Загрузка цен из Full Export API с двухэтапной загрузкой"""
+        """Load prices from Full Export API with two-stage loading"""
         if not force_refresh and self._is_cache_valid():
-            logger.info("Используем кэшированные цены")
+            logger.info("Using cached prices")
             return True
 
         if not force_refresh:
@@ -812,7 +812,7 @@ class MarketCSGOClient:
                     self._last_update_time = time.time()
                     self._total_lots_analyzed = sum(len(v) for v in disk_cache.values())
                 self._reset_prefix_cache()
-                logger.info("Кэш цен успешно загружен с диска")
+                logger.info("Price cache successfully loaded from disk")
                 return True
 
         try:
@@ -860,7 +860,7 @@ class MarketCSGOClient:
                         self._total_lots_analyzed = sum(len(v) for v in old_cache.values())
                     logger.warning('Price refresh failed; using previous in-memory cache')
                     return False
-                logger.error('Не удалось загрузить ни одного источника цен')
+                logger.error('Failed to load any price source')
                 if mode in {'v1_only', 'v1_first'}:
                     # Accuracy-first strict mode: avoid mock/v2 approximation fallback.
                     return False
@@ -872,16 +872,16 @@ class MarketCSGOClient:
             self._reset_prefix_cache()
             self._save_disk_cache(selected_cache)
 
-            logger.info('Кэш цен успешно обновлен (%s), cache_keys=%d lots=%d', mode, len(selected_cache), int(self._total_lots_analyzed or 0))
+            logger.info('Price cache successfully updated (%s), cache_keys=%d lots=%d', mode, len(selected_cache), int(self._total_lots_analyzed or 0))
             return True
 
         except Exception as e:
-            logger.error(f"Ошибка при загрузке цен: {e}")
-            # Не затираем рабочий кэш моковыми ценами при сетевой ошибке
+            logger.error(f"Error loading prices: {e}")
+            # Do not overwrite working cache with mock prices on network error
             with self._prices_cache_lock:
                 has_cache = bool(self._prices_cache)
             if has_cache:
-                logger.warning("Оставляем последний успешный кэш цен (сетевая ошибка)")
+                logger.warning("Keeping last successful price cache (network error)")
                 return False
             # If there's a disk cache (even stale) — prefer it over mock prices
             try:
@@ -899,64 +899,64 @@ class MarketCSGOClient:
             return self._load_mock_prices()
 
     def _parse_file_data(self, file_data: dict, cache_override: Optional[Dict[str, List[Tuple[float, Optional[float], str, bool]]]] = None) -> int:
-        """Парсинг данных из одного файла экспорта с отладкой"""
+        """Parse data from a single export file with debugging"""
         lots_processed = 0
         target_cache = cache_override if cache_override is not None else self._prices_cache
         
-        # Проверяем тип данных
+        # Check data type
         if isinstance(file_data, list):
-            # API возвращает прямой список лотов
+            # API returns a direct list of lots
             items = file_data
-            # Убираем спам логи
-            # logger.debug(f"Файл содержит прямой список из {len(items)} лотов")
+            # Suppress spam logs
+            # logger.debug(f"File contains a direct list of {len(items)} lots")
         elif isinstance(file_data, dict) and 'items' in file_data:
-            # API возвращает словарь с items
+            # API returns a dict with items
             items = file_data['items']
-            # Убираем спам логи
-            # logger.debug(f"Файл содержит словарь с {len(items)} лотов")
+            # Suppress spam logs
+            # logger.debug(f"File contains a dict with {len(items)} lots")
         else:
-            logger.warning(f"Неизвестный формат данных: {type(file_data)}")
+            logger.warning(f"Unknown data format: {type(file_data)}")
             return 0
         
-        # Отладка: выводим структуру первого элемента
-        # Убираем спам логи о структуре лотов
+        # Debug: print structure of first element
+        # Suppress spam logs about lot structure
         # if items and len(items) > 0:
         #     first_item = items[0]
-        #     logger.debug(f"Структура первого лота: {type(first_item)}, длина: {len(first_item) if isinstance(first_item, list) else 'N/A'}")
-        #     logger.debug(f"Первый лот: {first_item}")
+        #     logger.debug(f"Structure of first lot: {type(first_item)}, length: {len(first_item) if isinstance(first_item, list) else 'N/A'}")
+        #     logger.debug(f"First lot: {first_item}")
         
         for item in items:
             try:
-                # Проверяем минимальную длину массива
+                # Check minimum array length
                 if len(item) < 11:
                     continue
                 
-                # Извлекаем базовые данные
+                # Extract basic data
                 price_raw = item[0]
                 market_hash_name = item[2] if len(item) > 2 else ""
                 item_float = float(item[10]) if len(item) > 10 and item[10] is not None else None
                 
-                # Быстрый фильтр мусора: оставляем только оружейные скины
-                # (стикеры/капсулы/контейнеры и т.п. не участвуют в trade-up)
+                # Quick garbage filter: keep only weapon skins
+                # (stickers/capsules/containers etc. are not used in trade-up)
                 if ' | ' not in market_hash_name:
                     continue
 
-                # По формату full-export поле type обычно ближе к концу и часто строковое
-                # (например "Sticker", "Container", "Pistol" ...)
+                # In full-export format, the type field is usually near the end and often a string
+                # (e.g. "Sticker", "Container", "Pistol" ...)
                 item_type = None
                 if len(item) > 15:
                     item_type = item[15]
                 if isinstance(item_type, str) and item_type.lower() in {'sticker', 'container'}:
                     continue
 
-                # Конвертируем цену
+                # Convert price
                 try:
                     raw_val = float(price_raw)
 
-                    # Full-export может отдавать цену как:
-                    # - в тысячных доллара (2980 => $2.98)
-                    # - в центах (298 => $2.98)
-                    # Подбираем делитель по масштабу, чтобы не занижать цены в 10 раз.
+                    # Full-export may return price as:
+                    # - thousandths of a dollar (2980 => $2.98)
+                    # - cents (298 => $2.98)
+                    # Choose divisor by scale to avoid underpricing by 10x.
                     div = 1000.0 if raw_val >= 1000.0 else 100.0
                     price = raw_val / div
                 except (ValueError, TypeError):
@@ -965,11 +965,11 @@ class MarketCSGOClient:
                 if price <= 0 or not market_hash_name:
                     continue
 
-                # Souvenir нельзя крафтить/получать через trade-up — исключаем полностью
+                # Souvenir cannot be crafted/obtained via trade-up — exclude entirely
                 if 'souvenir' in str(market_hash_name).lower():
                     continue
                 
-                # Извлекаем float если есть
+                # Extract float if present
                 item_float = None
                 if len(item) > 10 and item[10] is not None:
                     try:
@@ -977,16 +977,16 @@ class MarketCSGOClient:
                     except (ValueError, TypeError):
                         item_float = None
                 
-                # Определяем качество: если есть float, используем его (в full-export качество часто не указано в названии)
+                # Determine wear: if float exists, use it (in full-export, wear is often not in the name)
                 wear = self._determine_wear_from_float(item_float) if item_float is not None else self._determine_wear(market_hash_name)
 
-                # Определяем StatTrak по исходному названию (так как нормализация может его вырезать)
+                # Determine StatTrak from original name (since normalization may strip it)
                 is_stattrak = 'stattrak' in market_hash_name.lower()
                 
-                # Нормализуем имя для кэширования
+                # Normalize name for caching
                 normalized_name = self._normalize_skin_name(market_hash_name)
                 
-                # Добавляем в кэш
+                # Add to cache
                 if normalized_name not in target_cache:
                     target_cache[normalized_name] = []
                 
@@ -994,16 +994,16 @@ class MarketCSGOClient:
                 lots_processed += 1
                 
             except Exception as e:
-                # Убираем спам логи об ошибках обработки лотов
-                # logger.debug(f"Ошибка обработки лота: {e}")
+                # Suppress spam logs about lot processing errors
+                # logger.debug(f"Error processing lot: {e}")
                 continue
         
-        # Убираем спам логи о количестве обработанных лотов
-        # logger.debug(f"Обработано {lots_processed} лотов из файла")
+        # Suppress spam logs about processed lot count
+        # logger.debug(f"Processed {lots_processed} lots from file")
         return lots_processed
     
     def _determine_wear(self, market_hash_name: str) -> str:
-        """Определяет качество скина по названию"""
+        """Determine skin wear by name"""
         name_lower = market_hash_name.lower()
         
         if 'factory new' in name_lower or '(fn)' in name_lower:
@@ -1025,7 +1025,7 @@ class MarketCSGOClient:
         available_wears: Optional[List[str]] = None
     ) -> str:
         """
-        Определяет качество по float с учётом доступных wear для скина.
+        Determines wear by float considering available wears for the skin.
         
         CS2 wear ranges (inclusive upper bound):
         FN: [0.00, 0.07], MW: (0.07, 0.15], FT: (0.15, 0.38], WW: (0.38, 0.45], BS: (0.45, 1.00]
@@ -1081,55 +1081,55 @@ class MarketCSGOClient:
         allow_refresh: bool = True,
     ) -> Optional[float]:
         """
-        Улучшенный поиск цены с маппингом на разные качества и фильтрацией StatTrak
+        Improved price search with mapping across wears and StatTrak filtering
         
         Args:
-            skin_name: имя скина из базы данных (без качества)
-            target_wear: целевое качество (опционально)
-            max_float: максимальный допустимый float (опционально)
-            exclude_stattrak: исключить StatTrak предметы (по умолчанию True)
+            skin_name: skin name from database (without wear)
+            target_wear: target wear (optional)
+            max_float: maximum allowable float (optional)
+            exclude_stattrak: exclude StatTrak items (default True)
             
         Returns:
-            float: цена или None
+            float: price or None
         """
         if (not self._is_cache_valid()) and allow_refresh:
             self.load_prices()
         
-        # Генерируем все варианты поиска
+        # Generate all search variants
         search_variants = self._generate_search_variants(skin_name)
 
-        # Берем snapshot кэша, чтобы во время поиска он не поменялся другим потоком
+        # Take a cache snapshot so it doesn't change during search
         with self._prices_cache_lock:
             cache_snapshot = self._prices_cache
         
-        # Собираем все цены из всех найденных скинов
+        # Collect all prices from all found skins
         all_prices = []
 
-        # 1) Сначала пробуем точные совпадения по ключу кэша (самый надежный вариант)
+        # 1) First try exact cache key matches (most reliable approach)
         for variant in search_variants:
             if variant not in cache_snapshot:
                 continue
             for price, item_float, wear, is_stattrak in cache_snapshot[variant]:
-                # Фильтр StatTrak
+                # StatTrak filter
                 if exclude_stattrak and is_stattrak:
                     continue
                 if require_stattrak and (not is_stattrak):
                     continue
 
-                # Фильтр по качеству
+                # Wear filter
                 if target_wear and wear != target_wear:
                     continue
 
-                # Фильтр по float
+                # Float filter
                 if max_float is not None:
-                    # Для v2 prices float часто отсутствует (None). В этом случае не выкидываем цену.
+                    # For v2 prices float is often missing (None). In this case don't discard the price.
                     if item_float is not None and item_float > max_float:
                         continue
 
                 all_prices.append((price, item_float, wear))
 
-        # Если качество запрошено, но в export оно отсутствует/Unknown, то не обнуляем цену.
-        # Fallback: берем самый дешевый ордер для точного имени без фильтра по wear.
+        # If quality is requested but missing/Unknown in export, don't discard the price.
+        # Fallback: take the cheapest order for exact name without wear filter.
         if (not all_prices) and target_wear:
             for variant in search_variants:
                 if variant not in cache_snapshot:
@@ -1146,22 +1146,22 @@ class MarketCSGOClient:
 
                     all_prices.append((price, item_float, wear))
 
-        # 2) Если не нашли, используем более «грязный» prefix-match как fallback
+        # 2) If not found, use a fuzzier prefix-match as fallback
         if (not all_prices) and (not strict_name_match):
             for variant in search_variants:
                 for cache_name in self._get_prefix_matches(variant, cache_snapshot):
                     for price, item_float, wear, is_stattrak in cache_snapshot.get(cache_name, []):
-                        # Фильтр StatTrak
+                        # StatTrak filter
                         if exclude_stattrak and is_stattrak:
                             continue
                         if require_stattrak and (not is_stattrak):
                             continue
                         
-                        # Фильтр по качеству
+                        # Wear filter
                         if target_wear and wear != target_wear:
                             continue
                         
-                        # Фильтр по float
+                        # Float filter
                         if max_float is not None:
                             if item_float is not None and item_float > max_float:
                                 continue
@@ -1169,7 +1169,7 @@ class MarketCSGOClient:
                         all_prices.append((price, item_float, wear))
         
         if (not all_prices) and (not strict_name_match) and target_wear is None and max_float is None:
-            # Если ничего не найдено, ищем самую дешевую цену без фильтров
+            # If nothing found, look for cheapest price without filters
             for variant in search_variants:
                 for cache_name in self._get_prefix_matches(variant, cache_snapshot):
                     for price, item_float, wear, is_stattrak in cache_snapshot.get(cache_name, []):
@@ -1193,7 +1193,7 @@ class MarketCSGOClient:
                 )
             return None
         
-        # Возвращаем самую дешевую цену
+        # Return the cheapest price
         return min(all_prices, key=lambda x: x[0])[0]
     
     def get_price_with_float(
@@ -1207,40 +1207,40 @@ class MarketCSGOClient:
         allow_refresh: bool = True,
     ) -> Optional[Tuple[float, float, str]]:
         """
-        Улучшенный поиск цены с float информацией, маппингом и фильтрацией StatTrak
+        Improved price search with float information, mapping and StatTrak filtering
         
         Returns:
-            Tuple[float, float, str]: (price, float_value, wear) или None
+            Tuple[float, float, str]: (price, float_value, wear) or None
         """
         if (not self._is_cache_valid()) and allow_refresh:
             self.load_prices()
         
-        # Генерируем все варианты поиска
+        # Generate all search variants
         search_variants = self._generate_search_variants(skin_name)
 
-        # Берем snapshot кэша, чтобы во время поиска он не поменялся другим потоком
+        # Take a cache snapshot so it doesn't change during search
         with self._prices_cache_lock:
             cache_snapshot = self._prices_cache
         
-        # Собираем все цены из всех найденных скинов
+        # Collect all prices from all found skins
         all_prices = []
 
-        # 1) Точные совпадения по ключу кэша
+        # 1) Exact cache key matches
         for variant in search_variants:
             if variant not in cache_snapshot:
                 continue
             for price, item_float, wear, is_stattrak in cache_snapshot[variant]:
-                # Фильтр StatTrak
+                # StatTrak filter
                 if exclude_stattrak and is_stattrak:
                     continue
                 if require_stattrak and (not is_stattrak):
                     continue
 
-                # Фильтр по качеству
+                # Wear filter
                 if target_wear and wear != target_wear:
                     continue
 
-                # Фильтр по float
+                # Float filter
                 if max_float is not None:
                     if item_float is not None and item_float > max_float:
                         continue
@@ -1252,17 +1252,17 @@ class MarketCSGOClient:
             for variant in search_variants:
                 for cache_name in self._get_prefix_matches(variant, cache_snapshot):
                     for price, item_float, wear, is_stattrak in cache_snapshot.get(cache_name, []):
-                        # Фильтр StatTrak
+                        # StatTrak filter
                         if exclude_stattrak and is_stattrak:
                             continue
                         if require_stattrak and (not is_stattrak):
                             continue
                         
-                        # Фильтр по качеству
+                        # Wear filter
                         if target_wear and wear != target_wear:
                             continue
                         
-                        # Фильтр по float
+                        # Float filter
                         if max_float is not None:
                             if item_float is not None and item_float > max_float:
                                 continue
@@ -1270,7 +1270,7 @@ class MarketCSGOClient:
                         all_prices.append((price, item_float, wear))
         
         if (not all_prices) and (not strict_name_match) and target_wear is None and max_float is None:
-            # Если ничего не найдено, ищем самую дешевую цену без фильтров
+            # If nothing found, look for cheapest price without filters
             for variant in search_variants:
                 for cache_name in self._get_prefix_matches(variant, cache_snapshot):
                     for price, item_float, wear, is_stattrak in cache_snapshot.get(cache_name, []):
@@ -1293,7 +1293,7 @@ class MarketCSGOClient:
                 )
             return None
         
-        # Возвращаем самый дешевый
+        # Return the cheapest
         cheapest = min(all_prices, key=lambda x: x[0])
         return cheapest[0], cheapest[1], cheapest[2]
 
@@ -1742,7 +1742,7 @@ class MarketCSGOClient:
         return float(base) * float(discount)
     
     def get_cache_info(self) -> Dict:
-        """Получение информации о кэше"""
+        """Get cache information"""
         return {
             'items_count': len(self._prices_cache),
             'cache_age_seconds': time.time() - self._last_update_time,
@@ -2052,8 +2052,8 @@ class MarketCSGOClient:
         }
 
     def _load_mock_prices(self) -> bool:
-        """Загрузка моковых цен для тестирования"""
-        logger.warning("Используем моковые цены для тестирования")
+        """Load mock prices for testing"""
+        logger.warning("Using mock prices for testing")
         
         mock_data = {
             'desert eagle blaze': [(1.50, 0.06, 'Factory New', False)],
@@ -3224,7 +3224,7 @@ class DMarketClient:
 
 
 class PriceManager:
-    """Менеджер цен для работы с Full Export API"""
+    """Price manager for working with Full Export API"""
     
     def __init__(self):
         self.market_client = MarketCSGOClient()
@@ -3238,22 +3238,22 @@ class PriceManager:
         self._bid_prices_ttl: float = 300.0  # 5 min
     
     def initialize(self) -> bool:
-        """Инициализация с быстрым стартом.
+        """Fast-start initialization.
 
-        Сначала грузим устаревший кэш с диска (если есть) — сервис сразу готов отвечать.
-        _last_update_time намеренно НЕ обновляем, чтобы фоновый воркер
-        bot_service.start_refresher() понял, что цены устарели, и подтянул свежие из API.
-        Если диск-кэша нет вообще — блокирующий fetch из API (первый деплой).
+        First load stale disk cache (if available) — service is immediately ready to respond.
+        We deliberately do NOT update _last_update_time so the background worker
+        bot_service.start_refresher() knows prices are stale and fetches fresh ones from API.
+        If no disk cache at all — blocking fetch from API (first deployment).
         """
         mc = self.market_client
-        # Быстрый путь: устаревший кэш
+        # Fast path: stale cache
         stale = mc._load_disk_cache(allow_stale=True)
         if stale:
             with mc._prices_cache_lock:
                 mc._prices_cache = stale
                 mc._total_lots_analyzed = sum(len(v) for v in stale.values())
-                # Не трогаем _last_update_time → _is_cache_valid() вернёт False
-                # → при следующем refresh_prices() данные будут перезагружены из API.
+                # Don't touch _last_update_time → _is_cache_valid() will return False
+                # → on next refresh_prices() data will be reloaded from API.
             mc._reset_prefix_cache()
             import logging as _log
             _log.getLogger(__name__).info(
@@ -3262,7 +3262,7 @@ class PriceManager:
                 len(stale),
             )
             return True
-        # Кэша нет совсем — блокирующий fetch (только при первом деплое)
+        # No cache at all — blocking fetch (first deployment only)
         return mc.load_prices()
 
     def refresh_prices(self, force_refresh: bool = True) -> bool:
@@ -3325,16 +3325,16 @@ class PriceManager:
         allow_refresh: bool = True,
     ) -> Optional[float]:
         """
-        Улучшенный поиск цены с маппингом на разные качества и фильтрацией StatTrak
+        Improved price search with mapping across wears and StatTrak filtering
         
         Args:
-            skin_name: имя скина из базы данных (без качества)
-            target_wear: целевое качество (опционально)
-            max_float: максимальный допустимый float (опционально)
-            exclude_stattrak: исключить StatTrak предметы (по умолчанию True)
+            skin_name: skin name from database (without wear)
+            target_wear: target wear (optional)
+            max_float: maximum allowable float (optional)
+            exclude_stattrak: exclude StatTrak items (default True)
             
         Returns:
-            float: цена или None
+            float: price or None
         """
         prices = []
 
@@ -3415,10 +3415,10 @@ class PriceManager:
         allow_refresh: bool = True,
     ) -> Optional[Tuple[float, float, str]]:
         """
-        Улучшенный поиск цены с float информацией, маппингом и фильтрацией StatTrak
+        Improved price search with float information, mapping and StatTrak filtering
         
         Returns:
-            Tuple[float, float, str]: (price, float_value, wear) или None
+            Tuple[float, float, str]: (price, float_value, wear) or None
         """
         return self.market_client.get_price_with_float(
             skin_name,

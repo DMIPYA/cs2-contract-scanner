@@ -79,8 +79,8 @@ class TargetHuntingService:
         self.price_manager = PriceManager()
         self.calculator: Optional[ContractCalculator] = None
 
-        # Шаг 8: Очистка кэша при старте после изменения алгоритма расчёта wear
-        # Это гарантирует, что старый кэш с неверными wear-метками не будет использоваться
+        # Step 8: Clear cache on startup after wear calculation algorithm change
+        # This ensures old cache with incorrect wear labels won't be used
         try:
             if hasattr(self.price_manager, 'clear_price_memoization'):
                 self.price_manager.clear_price_memoization()
