@@ -1,5 +1,4 @@
 # Crafty — CS2 Trade-Up Contract Scanner
-# Crafty — CS2 Trade-Up Contract Scanner
 
 ![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)
 ![Telegram](https://img.shields.io/badge/Telegram-Bot-blue?logo=telegram)
