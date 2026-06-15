@@ -7,6 +7,12 @@
 ![License](https://img.shields.io/badge/License-MIT-green)
 
 
+## Screenshots
+
+![Main Menu](screenshots/menu.png)
+![Contract Results](screenshots/conract_details.png)
+![Contract Details](screenshots/favorite_menu.png)
+
 Crafty is a Telegram bot + Mini App that scans thousands of CS2 trade-up combinations to find profitable contracts. It calculates expected value (EV), ROI, outcome probabilities, float optimization, and auto-detects jackpot opportunities.
 
 ## Features
