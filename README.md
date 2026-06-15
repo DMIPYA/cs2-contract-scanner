@@ -6,6 +6,9 @@
 ![Docker](https://img.shields.io/badge/Docker-ready-blue?logo=docker)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+> Finds profitable CS2 trade-up contracts in seconds — 
+> calculates EV, ROI and float optimization across 
+> all collections simultaneously
 
 ## Screenshots
 
