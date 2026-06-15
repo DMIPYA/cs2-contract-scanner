@@ -1,4 +1,12 @@
 # Crafty — CS2 Trade-Up Contract Scanner
+# Crafty — CS2 Trade-Up Contract Scanner
+
+![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python)
+![Telegram](https://img.shields.io/badge/Telegram-Bot-blue?logo=telegram)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi)
+![Docker](https://img.shields.io/badge/Docker-ready-blue?logo=docker)
+![License](https://img.shields.io/badge/License-MIT-green)
+
 
 Crafty is a Telegram bot + Mini App that scans thousands of CS2 trade-up combinations to find profitable contracts. It calculates expected value (EV), ROI, outcome probabilities, float optimization, and auto-detects jackpot opportunities.
 
